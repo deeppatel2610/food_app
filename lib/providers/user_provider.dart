@@ -76,6 +76,42 @@ class UserProvider extends ChangeNotifier {
     }
   }
 
+  // Update user profile details
+  Future<void> updateProfile({
+    required String firstName,
+    required String lastName,
+    required String username,
+    required String email,
+    required int age,
+    required double weight,
+    required double height,
+    required String bloodGroup,
+    required String healthConditions,
+  }) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      final updatedData = await ApiService.editUserProfile(
+        firstName: firstName,
+        lastName: lastName,
+        username: username,
+        email: email,
+        age: age,
+        weight: weight,
+        height: height,
+        bloodGroup: bloodGroup,
+        healthConditions: healthConditions,
+      );
+      _user = UserModel.fromJson(updatedData);
+      _isLoading = false;
+      notifyListeners();
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      rethrow;
+    }
+  }
+
   // Log out the user and clear state
   Future<void> logout() async {
     _isLoading = true;

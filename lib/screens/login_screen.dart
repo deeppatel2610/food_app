@@ -225,14 +225,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     alignment: Alignment.centerRight,
                     child: TextButton(
                       onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                                'Password reset link sent to your email!',
-                                style: GoogleFonts.poppins()),
-                            backgroundColor: const Color(0xFF2ECC71),
-                          ),
-                        );
+                        Navigator.pushNamed(context, '/forgot_password');
                       },
                       style: TextButton.styleFrom(
                         foregroundColor: const Color(0xFF27AE60),

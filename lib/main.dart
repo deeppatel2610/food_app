@@ -14,6 +14,9 @@ import 'screens/food_analysis_screen.dart';
 import 'screens/add_daily_post_screen.dart';
 import 'screens/dm_screen.dart';
 import 'screens/all_scans_screen.dart';
+import 'screens/forgot_password_screen.dart';
+import 'screens/reset_password_screen.dart';
+import 'screens/edit_profile_screen.dart';
 import 'package:provider/provider.dart';
 import 'providers/user_provider.dart';
 import 'models/user_model.dart';
@@ -130,6 +133,15 @@ class MyApp extends StatelessWidget {
             break;
           case '/all_scans':
             builder = const AllScansScreen();
+            break;
+          case '/forgot_password':
+            builder = const ForgotPasswordScreen();
+            break;
+          case '/reset_password':
+            builder = const ResetPasswordScreen();
+            break;
+          case '/edit_profile':
+            builder = const EditProfileScreen();
             break;
           default:
             builder = isLoggedIn ? const HomeScreen() : const WelcomeScreen();

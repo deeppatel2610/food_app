@@ -59,6 +59,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
               color: Color(0xFF1E272C)),
           onPressed: () => Navigator.pop(context), // Go back without changes
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.edit_rounded, color: Color(0xFF27AE60)),
+            tooltip: 'Edit Profile',
+            onPressed: () {
+              Navigator.pushNamed(context, '/edit_profile');
+            },
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: SingleChildScrollView(
         physics: const BouncingScrollPhysics(),

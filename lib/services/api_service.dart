@@ -588,6 +588,188 @@ class ApiService {
     }
   }
 
+  // Edit User Profile using PUT /user API endpoint
+  static Future<Map<String, dynamic>> editUserProfile({
+    required String firstName,
+    required String lastName,
+    required String username,
+    required String email,
+    required int age,
+    required double weight,
+    required double height,
+    required String bloodGroup,
+    required String healthConditions,
+    String? token,
+  }) async {
+    try {
+      String? authToken = token;
+      if (authToken == null || authToken.isEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        authToken = prefs.getString(accessTokenKey);
+      }
+
+      final response = await _dio.put(
+        'user',
+        data: {
+          'first_name': firstName,
+          'firstName': firstName,
+          'last_name': lastName,
+          'lastName': lastName,
+          'username': username,
+          'email': email,
+          'age': age,
+          'weight': weight,
+          'height': height,
+          'blood_group': bloodGroup,
+          'bloodGroup': bloodGroup,
+          'health_problem': healthConditions,
+          'healthProblem': healthConditions,
+        },
+        options: Options(
+          headers: {
+            if (authToken != null && authToken.isNotEmpty)
+              'Authorization': 'Bearer $authToken',
+          },
+        ),
+      );
+
+      final responseData = response.data is Map<String, dynamic>
+          ? response.data as Map<String, dynamic>
+          : {};
+
+      if (response.statusCode == 200 && responseData['success'] == true) {
+        final rawUser = responseData['data'] ?? {};
+        final user = UserModel.fromJson(rawUser).toJson();
+
+        // Save updated user data to SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(userDataKey, jsonEncode(user));
+
+        return user;
+      } else if (response.statusCode == 401) {
+        final newToken = await refreshToken();
+        return editUserProfile(
+          firstName: firstName,
+          lastName: lastName,
+          username: username,
+          email: email,
+          age: age,
+          weight: weight,
+          height: height,
+          bloodGroup: bloodGroup,
+          healthConditions: healthConditions,
+          token: newToken,
+        );
+      } else {
+        final message =
+            responseData['message'] ?? 'Failed to update user profile.';
+        throw ApiException(message, response.statusCode);
+      }
+    } on DioException catch (e) {
+      if (e.response != null && e.response?.statusCode == 401) {
+        try {
+          final newToken = await refreshToken();
+          return editUserProfile(
+            firstName: firstName,
+            lastName: lastName,
+            username: username,
+            email: email,
+            age: age,
+            weight: weight,
+            height: height,
+            bloodGroup: bloodGroup,
+            healthConditions: healthConditions,
+            token: newToken,
+          );
+        } catch (_) {}
+      }
+      if (e.response != null && e.response?.data is Map) {
+        final msg = e.response?.data['message'] ?? 'Server error occurred.';
+        throw ApiException(msg, e.response?.statusCode);
+      } else {
+        throw ApiException(e.message ?? 'Network error occurred');
+      }
+    } catch (e) {
+      if (e is AuthException) rethrow;
+      throw ApiException(
+          'An unexpected error occurred while updating profile: $e');
+    }
+  }
+
+  // Forgot Password API using POST /auth/forgot-password
+  static Future<Map<String, dynamic>> forgotPassword(String email) async {
+    try {
+      final response = await _dio.post(
+        'auth/forgot-password',
+        data: {
+          'email': email,
+        },
+      );
+
+      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
+          ? response.data as Map<String, dynamic>
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200 && responseData['success'] == true) {
+        return responseData['data'] is Map<String, dynamic>
+            ? responseData['data'] as Map<String, dynamic>
+            : <String, dynamic>{};
+      } else {
+        final message =
+            responseData['message'] ?? 'Failed to send password reset token.';
+        throw ApiException(message, response.statusCode);
+      }
+    } on DioException catch (e) {
+      if (e.response != null && e.response?.data is Map) {
+        final msg = e.response?.data['message'] ?? 'Server error occurred.';
+        throw ApiException(msg, e.response?.statusCode);
+      } else {
+        throw ApiException(e.message ?? 'Network error occurred');
+      }
+    } catch (e) {
+      throw ApiException(
+          'An unexpected error occurred during forgot password: $e');
+    }
+  }
+
+  // Reset Password API using POST /auth/reset-password
+  static Future<Map<String, dynamic>> resetPassword({
+    required String token,
+    required String password,
+  }) async {
+    try {
+      final response = await _dio.post(
+        'auth/reset-password',
+        data: {
+          'token': token,
+          'password': password,
+        },
+      );
+
+      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
+          ? response.data as Map<String, dynamic>
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200 && responseData['success'] == true) {
+        return responseData;
+      } else {
+        final message =
+            responseData['message'] ?? 'Failed to reset password.';
+        throw ApiException(message, response.statusCode);
+      }
+    } on DioException catch (e) {
+      if (e.response != null && e.response?.data is Map) {
+        final msg = e.response?.data['message'] ?? 'Server error occurred.';
+        throw ApiException(msg, e.response?.statusCode);
+      } else {
+        throw ApiException(e.message ?? 'Network error occurred');
+      }
+    } catch (e) {
+      throw ApiException(
+          'An unexpected error occurred during reset password: $e');
+    }
+  }
+
   // Mock Community Feed database
   static final List<Map<String, dynamic>> mockCommunityPosts = [
     {

@@ -2,8 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:provider/provider.dart';
-import '../providers/user_provider.dart';
+import '../services/api_service.dart';
 
 class AddDailyPostScreen extends StatefulWidget {
   const AddDailyPostScreen({super.key});
@@ -21,6 +20,7 @@ class _AddDailyPostScreenState extends State<AddDailyPostScreen> {
   final ImagePicker _picker = ImagePicker();
   String? _beforeImagePath;
   String? _afterImagePath;
+  bool _isLoading = false;
 
   @override
   void dispose() {
@@ -60,7 +60,7 @@ class _AddDailyPostScreenState extends State<AddDailyPostScreen> {
     }
   }
 
-  void _handlePublish(Map<String, dynamic> user) {
+  void _handlePublish() async {
     if (_formKey.currentState!.validate()) {
       if (_beforeImagePath == null || _afterImagePath == null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -73,31 +73,61 @@ class _AddDailyPostScreenState extends State<AddDailyPostScreen> {
         return;
       }
 
-      // Construct a new post map to return back to Feed
-      final newPost = {
-        'id': 'post-${DateTime.now().millisecondsSinceEpoch}',
-        'author_name': '${user['first_name'] ?? 'Guest'} ${user['last_name'] ?? ''}'.trim(),
-        'author_username': user['username'] ?? 'guest',
-        'author_avatar_color': 0xFF2ECC71, // Green accent for the user
-        'caption': _captionController.text.trim(),
-        'before_metric': _beforeWeightController.text.trim(),
-        'after_metric': _afterWeightController.text.trim(),
-        'before_image_path': _beforeImagePath,
-        'after_image_path': _afterImagePath,
-        'likes': 0,
-        'is_liked': false,
-        'comments': [],
-      };
+      setState(() {
+        _isLoading = true;
+      });
 
-      Navigator.pop(context, newPost);
+      try {
+        final newPost = await ApiService.publishCommunityPost(
+          caption: _captionController.text.trim(),
+          beforeMetric: _beforeWeightController.text.trim(),
+          afterMetric: _afterWeightController.text.trim(),
+          beforeImagePath: _beforeImagePath!,
+          afterImagePath: _afterImagePath!,
+        );
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Transformation published successfully!', style: GoogleFonts.poppins()),
+              backgroundColor: const Color(0xFF27AE60),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+          Navigator.pop(context, newPost);
+        }
+      } on ApiException catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(e.message, style: GoogleFonts.poppins()),
+              backgroundColor: Colors.red[800],
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('An unexpected error occurred during publishing.', style: GoogleFonts.poppins()),
+              backgroundColor: Colors.red[800],
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Get user details from UserProvider
-    final userModel = Provider.of<UserProvider>(context).user;
-    final user = userModel?.toJson() ?? {};
 
     return Scaffold(
       backgroundColor: const Color(0xFFF9FBF9),
@@ -272,7 +302,7 @@ class _AddDailyPostScreenState extends State<AddDailyPostScreen> {
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: () => _handlePublish(user),
+                  onPressed: _isLoading ? null : _handlePublish,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF2ECC71),
                     foregroundColor: Colors.white,
@@ -281,13 +311,24 @@ class _AddDailyPostScreenState extends State<AddDailyPostScreen> {
                       borderRadius: BorderRadius.circular(16),
                     ),
                   ),
-                  child: Text(
-                    'Publish Transformation',
-                    style: GoogleFonts.poppins(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                  child: _isLoading
+                      ? const Center(
+                          child: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                            ),
+                          ),
+                        )
+                      : Text(
+                          'Publish Transformation',
+                          style: GoogleFonts.poppins(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                 ),
               ),
               const SizedBox(height: 24),

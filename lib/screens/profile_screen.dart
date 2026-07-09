@@ -358,7 +358,46 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ),
 
-            const SizedBox(height: 36),
+            const SizedBox(height: 20),
+
+            // My Progress Posts / Transformations navigation button card
+            Card(
+              elevation: 0,
+              color: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: BorderSide(color: Colors.grey[100]!, width: 1.5),
+              ),
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2ECC71).withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.photo_library_rounded, color: Color(0xFF27AE60)),
+                ),
+                title: Text(
+                  'My Transformations',
+                  style: GoogleFonts.outfit(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF1E272C),
+                  ),
+                ),
+                subtitle: Text(
+                  'View and manage your progress posts',
+                  style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey[500]),
+                ),
+                trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: Colors.grey),
+                onTap: () {
+                  Navigator.pushNamed(context, '/my_posts');
+                },
+              ),
+            ),
+
+            const SizedBox(height: 28),
 
             // 4. Save Button
             SizedBox(

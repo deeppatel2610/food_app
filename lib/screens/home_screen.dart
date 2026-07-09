@@ -26,6 +26,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final ScrollController _communityScrollController = ScrollController();
   bool _isCommunityLoadingMore = false;
   int _communityPage = 1;
+  bool _hasMoreCommunityPosts = true;
 
   @override
   void didChangeDependencies() {
@@ -89,73 +90,95 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     await _loadScanHistory();
   }
 
-  Future<void> _refreshCommunityData() async {
-    await Future.delayed(const Duration(milliseconds: 1500));
+  bool _isCommunityLoading = false;
+
+  Future<void> _loadCommunityFeed() async {
     if (mounted) {
       setState(() {
-        _posts = List<Map<String, dynamic>>.from(ApiService.mockCommunityPosts);
+        _isCommunityLoading = true;
         _communityPage = 1;
+        _hasMoreCommunityPosts = true;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Feed updated!', style: GoogleFonts.poppins()),
-          backgroundColor: const Color(0xFF2ECC71),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    }
+    try {
+      final feed = await ApiService.getCommunityFeed(page: 1, limit: 10);
+      if (mounted) {
+        setState(() {
+          _posts = feed;
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to load community feed: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCommunityLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _refreshCommunityData() async {
+    try {
+      final feed = await ApiService.getCommunityFeed(page: 1, limit: 10);
+      if (mounted) {
+        setState(() {
+          _posts = feed;
+          _communityPage = 1;
+          _hasMoreCommunityPosts = true;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Feed updated!', style: GoogleFonts.poppins()),
+            backgroundColor: const Color(0xFF2ECC71),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content:
+                Text('Failed to update feed: $e', style: GoogleFonts.poppins()),
+            backgroundColor: Colors.red[800],
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
 
   Future<void> _loadMoreCommunityPosts() async {
+    if (!_hasMoreCommunityPosts || _isCommunityLoadingMore) return;
+
     if (mounted) {
       setState(() {
         _isCommunityLoadingMore = true;
       });
     }
 
-    await Future.delayed(const Duration(milliseconds: 1500));
-
-    final List<Map<String, dynamic>> extraPosts = [
-      {
-        'id': 'post-extra-1-$_communityPage',
-        'author_name': 'Michael Jordan',
-        'author_username': 'mj_fit23',
-        'author_avatar_color': 0xFF16A085,
-        'caption':
-            'Swapped fast food for home-cooked keto recipes. The change in my energy levels is night and day! Focus on consistency, and the results will follow.',
-        'before_metric': '95 kg (March)',
-        'after_metric': '85 kg (June)',
-        'likes': 420,
-        'is_liked': false,
-        'comments': [],
-      },
-      {
-        'id': 'post-extra-2-$_communityPage',
-        'author_name': 'Clara Oswald',
-        'author_username': 'clara_run',
-        'author_avatar_color': 0xFF8E44AD,
-        'caption':
-            'Stretched my daily running route and strictly tracked calorie intake on NutriLife! Successfully managed sugar cravings with green tea and berries.',
-        'before_metric': 'Sweet Tooth Daily',
-        'after_metric': 'Fruit & Tea Snack Only',
-        'likes': 188,
-        'is_liked': false,
-        'comments': [
-          {
-            'author': 'Liam Green',
-            'text': 'Green tea is indeed a lifesaver for sweet cravings!',
-            'time': '30m ago',
+    try {
+      final nextPage = _communityPage + 1;
+      final feed = await ApiService.getCommunityFeed(page: nextPage, limit: 10);
+      if (mounted) {
+        setState(() {
+          if (feed.isEmpty) {
+            _hasMoreCommunityPosts = false;
+          } else {
+            _posts.addAll(feed);
+            _communityPage = nextPage;
           }
-        ],
+        });
       }
-    ];
-
-    if (mounted) {
-      setState(() {
-        _posts.addAll(extraPosts);
-        _communityPage++;
-        _isCommunityLoadingMore = false;
-      });
+    } catch (e) {
+      debugPrint('Failed to load more posts: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCommunityLoadingMore = false;
+        });
+      }
     }
   }
 
@@ -175,8 +198,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-    // Copy community posts locally so user can interact and append new posts
-    _posts = List<Map<String, dynamic>>.from(ApiService.mockCommunityPosts);
+    _posts = [];
+    _loadCommunityFeed();
 
     // Add listener for community feed infinite scrolling
     _communityScrollController.addListener(() {
@@ -758,33 +781,50 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             isDense: true,
                             border: InputBorder.none,
                           ),
-                          onFieldSubmitted: (text) {
+                          onFieldSubmitted: (text) async {
                             if (text.trim().isEmpty) return;
-                            setState(() {
-                              comments.add({
-                                'author': 'You',
-                                'text': text.trim(),
-                                'time': 'Just now',
-                              });
-                            });
-                            setModalState(() {});
+                            final trimmedText = text.trim();
                             commentController.clear();
+                            try {
+                              final newComment =
+                                  await ApiService.addCommentToPost(
+                                      post['id'], trimmedText);
+                              setState(() {
+                                comments.add(newComment);
+                              });
+                              setModalState(() {});
+                            } catch (e) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Failed to post comment: $e'),
+                                  backgroundColor: Colors.red[800],
+                                ),
+                              );
+                            }
                           },
                         ),
                       ),
                       TextButton(
-                        onPressed: () {
+                        onPressed: () async {
                           final text = commentController.text.trim();
                           if (text.isEmpty) return;
-                          setState(() {
-                            comments.add({
-                              'author': 'You',
-                              'text': text,
-                              'time': 'Just now',
-                            });
-                          });
-                          setModalState(() {});
                           commentController.clear();
+                          try {
+                            final newComment =
+                                await ApiService.addCommentToPost(
+                                    post['id'], text);
+                            setState(() {
+                              comments.add(newComment);
+                            });
+                            setModalState(() {});
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Failed to post comment: $e'),
+                                backgroundColor: Colors.red[800],
+                              ),
+                            );
+                          }
                         },
                         child: Text(
                           'Post',
@@ -1397,289 +1437,361 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       ),
 
                       // B. Scrollable Feed Posts List
-                      SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                          (context, index) {
-                            final post = _posts[index];
-                            final int avatarColor =
-                                post['author_avatar_color'] ?? 0xFF2ECC71;
-                            final bool isLiked = post['is_liked'] ?? false;
+                      if (_isCommunityLoading)
+                        const SliverToBoxAdapter(
+                          child: Padding(
+                            padding: EdgeInsets.only(top: 100.0),
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                    Color(0xFF2ECC71)),
+                              ),
+                            ),
+                          ),
+                        )
+                      else if (_posts.isEmpty)
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 100.0),
+                            child: Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.feed_outlined,
+                                      size: 48, color: Colors.grey[300]),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    'No transformations shared yet.',
+                                    style: GoogleFonts.poppins(
+                                        color: Colors.grey[500]),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    'Be the first to share your progress!',
+                                    style: GoogleFonts.poppins(
+                                        color: Colors.grey[400], fontSize: 12),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        )
+                      else
+                        SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                            (context, index) {
+                              final post = _posts[index];
+                              final int avatarColor =
+                                  post['author_avatar_color'] ?? 0xFF2ECC71;
+                              final bool isLiked = post['is_liked'] ?? false;
 
-                            return TweenAnimationBuilder<double>(
-                              tween: Tween<double>(begin: 0.0, end: 1.0),
-                              duration: Duration(
-                                  milliseconds:
-                                      350 + (index * 80).clamp(0, 300)),
-                              curve: Curves.easeOutQuad,
-                              builder: (context, value, child) {
-                                return Opacity(
-                                  opacity: value,
-                                  child: Transform.translate(
-                                    offset: Offset(0, 15 * (1.0 - value)),
-                                    child: child,
-                                  ),
-                                );
-                              },
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 24.0, vertical: 10.0),
-                                child: Card(
-                                  elevation: 0,
-                                  color: Colors.white,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(20),
-                                    side: BorderSide(
-                                        color: Colors.grey[100]!, width: 1.5),
-                                  ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(18.0),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        // Post Author Row & DM Navigation link
-                                        Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            Row(
-                                              children: [
-                                                CircleAvatar(
-                                                  radius: 18,
-                                                  backgroundColor:
-                                                      Color(avatarColor)
-                                                          .withOpacity(0.15),
-                                                  child: Text(
-                                                    post['author_name'][0],
-                                                    style: GoogleFonts.outfit(
-                                                      color: Color(avatarColor),
-                                                      fontWeight:
-                                                          FontWeight.bold,
-                                                      fontSize: 14,
+                              return TweenAnimationBuilder<double>(
+                                tween: Tween<double>(begin: 0.0, end: 1.0),
+                                duration: Duration(
+                                    milliseconds:
+                                        350 + (index * 80).clamp(0, 300)),
+                                curve: Curves.easeOutQuad,
+                                builder: (context, value, child) {
+                                  return Opacity(
+                                    opacity: value,
+                                    child: Transform.translate(
+                                      offset: Offset(0, 15 * (1.0 - value)),
+                                      child: child,
+                                    ),
+                                  );
+                                },
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 24.0, vertical: 10.0),
+                                  child: Card(
+                                    elevation: 0,
+                                    color: Colors.white,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(20),
+                                      side: BorderSide(
+                                          color: Colors.grey[100]!, width: 1.5),
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(18.0),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          // Post Author Row & DM Navigation link
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  CircleAvatar(
+                                                    radius: 18,
+                                                    backgroundColor:
+                                                        Color(avatarColor)
+                                                            .withOpacity(0.15),
+                                                    child: Text(
+                                                      post['author_name'][0],
+                                                      style: GoogleFonts.outfit(
+                                                        color:
+                                                            Color(avatarColor),
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                        fontSize: 14,
+                                                      ),
                                                     ),
                                                   ),
-                                                ),
-                                                const SizedBox(width: 10),
-                                                Column(
+                                                  const SizedBox(width: 10),
+                                                  Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Text(
+                                                        post['author_name'],
+                                                        style:
+                                                            GoogleFonts.poppins(
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          fontSize: 13,
+                                                          color: const Color(
+                                                              0xFF1E272C),
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        '@${post['author_username']}',
+                                                        style:
+                                                            GoogleFonts.poppins(
+                                                          fontSize: 11,
+                                                          color:
+                                                              Colors.grey[400],
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ],
+                                              ),
+                                              // DM Icon (Chat with Author)
+                                              IconButton(
+                                                icon: const Icon(
+                                                    Icons
+                                                        .chat_bubble_outline_rounded,
+                                                    color: Color(0xFF27AE60),
+                                                    size: 20),
+                                                onPressed: () {
+                                                  Navigator.pushNamed(
+                                                    context,
+                                                    '/dm',
+                                                    arguments: {
+                                                      'recipientName':
+                                                          post['author_name'],
+                                                      'recipientUsername': post[
+                                                          'author_username'],
+                                                      'avatarColor':
+                                                          avatarColor,
+                                                    },
+                                                  );
+                                                },
+                                              ),
+                                            ],
+                                          ),
+
+                                          const SizedBox(height: 12),
+
+                                          // Caption
+                                          Text(
+                                            post['caption'],
+                                            style: GoogleFonts.poppins(
+                                              fontSize: 13.5,
+                                              color: Colors.grey[750],
+                                              height: 1.45,
+                                            ),
+                                          ),
+
+                                          const SizedBox(height: 16),
+
+                                          // Before / After comparison layout
+                                          Row(
+                                            children: [
+                                              // Before Photo Box
+                                              Expanded(
+                                                child: Column(
                                                   crossAxisAlignment:
                                                       CrossAxisAlignment.start,
                                                   children: [
-                                                    Text(
-                                                      post['author_name'],
-                                                      style:
-                                                          GoogleFonts.poppins(
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        fontSize: 13,
-                                                        color: const Color(
-                                                            0xFF1E272C),
-                                                      ),
+                                                    _buildBeforeAfterBox(
+                                                      label: 'BEFORE',
+                                                      imagePath: post[
+                                                          'before_image_path'],
+                                                      fallbackColor: const Color(
+                                                          0xFFE9F7EF), // soft red/light green
                                                     ),
-                                                    Text(
-                                                      '@${post['author_username']}',
-                                                      style:
-                                                          GoogleFonts.poppins(
-                                                        fontSize: 11,
-                                                        color: Colors.grey[400],
+                                                    const SizedBox(height: 6),
+                                                    Center(
+                                                      child: Text(
+                                                        post['before_metric'],
+                                                        style:
+                                                            GoogleFonts.poppins(
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          fontSize: 12,
+                                                          color:
+                                                              Colors.grey[600],
+                                                        ),
                                                       ),
                                                     ),
                                                   ],
                                                 ),
-                                              ],
-                                            ),
-                                            // DM Icon (Chat with Author)
-                                            IconButton(
-                                              icon: const Icon(
-                                                  Icons
-                                                      .chat_bubble_outline_rounded,
-                                                  color: Color(0xFF27AE60),
-                                                  size: 20),
-                                              onPressed: () {
-                                                Navigator.pushNamed(
-                                                  context,
-                                                  '/dm',
-                                                  arguments: {
-                                                    'recipientName':
-                                                        post['author_name'],
-                                                    'recipientUsername':
-                                                        post['author_username'],
-                                                    'avatarColor': avatarColor,
-                                                  },
-                                                );
-                                              },
-                                            ),
-                                          ],
-                                        ),
-
-                                        const SizedBox(height: 12),
-
-                                        // Caption
-                                        Text(
-                                          post['caption'],
-                                          style: GoogleFonts.poppins(
-                                            fontSize: 13.5,
-                                            color: Colors.grey[750]
-                                                .colorWithBorderDefault(),
-                                            height: 1.45,
+                                              ),
+                                              const SizedBox(width: 14),
+                                              // After Photo Box
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    _buildBeforeAfterBox(
+                                                      label: 'AFTER',
+                                                      imagePath: post[
+                                                          'after_image_path'],
+                                                      fallbackColor: const Color(
+                                                          0xFFD4F1E1), // deep green
+                                                    ),
+                                                    const SizedBox(height: 6),
+                                                    Center(
+                                                      child: Text(
+                                                        post['after_metric'],
+                                                        style:
+                                                            GoogleFonts.poppins(
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                          fontSize: 12,
+                                                          color: const Color(
+                                                              0xFF27AE60),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
                                           ),
-                                        ),
 
-                                        const SizedBox(height: 16),
+                                          const Divider(
+                                              height: 32, thickness: 1.2),
 
-                                        // Before / After comparison layout
-                                        Row(
-                                          children: [
-                                            // Before Photo Box
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  _buildBeforeAfterBox(
-                                                    label: 'BEFORE',
-                                                    imagePath: post[
-                                                        'before_image_path'],
-                                                    fallbackColor: const Color(
-                                                        0xFFE9F7EF), // soft red/light green
-                                                  ),
-                                                  const SizedBox(height: 6),
-                                                  Center(
-                                                    child: Text(
-                                                      post['before_metric'],
+                                          // Interactions Bar (Like, Comment, Share)
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              // Like Button with pulse animation
+                                              LikeButtonAnimated(
+                                                isLiked: isLiked,
+                                                likesCount:
+                                                    post['likes'] as int,
+                                                onTap: () async {
+                                                  final originalIsLiked =
+                                                      isLiked;
+                                                  final originalLikes =
+                                                      post['likes'] as int;
+                                                  setState(() {
+                                                    post['is_liked'] = !isLiked;
+                                                    post['likes'] = isLiked
+                                                        ? originalLikes - 1
+                                                        : originalLikes + 1;
+                                                  });
+                                                  try {
+                                                    await ApiService
+                                                        .toggleLikePost(
+                                                            post['id']);
+                                                  } catch (e) {
+                                                    // Revert status on failure
+                                                    setState(() {
+                                                      post['is_liked'] =
+                                                          originalIsLiked;
+                                                      post['likes'] =
+                                                          originalLikes;
+                                                    });
+                                                    ScaffoldMessenger.of(
+                                                            context)
+                                                        .showSnackBar(
+                                                      SnackBar(
+                                                        content: Text(
+                                                            'Failed to update like status: $e'),
+                                                        backgroundColor:
+                                                            Colors.red[800],
+                                                      ),
+                                                    );
+                                                  }
+                                                },
+                                              ),
+                                              // Comment Button
+                                              InkWell(
+                                                onTap: () =>
+                                                    _showCommentsBottomSheet(
+                                                        post),
+                                                child: Row(
+                                                  children: [
+                                                    Icon(
+                                                        Icons
+                                                            .mode_comment_outlined,
+                                                        color: Colors.grey[600],
+                                                        size: 18),
+                                                    const SizedBox(width: 6),
+                                                    Text(
+                                                      (post['comments']
+                                                              as List<dynamic>)
+                                                          .length
+                                                          .toString(),
                                                       style:
                                                           GoogleFonts.poppins(
-                                                        fontWeight:
-                                                            FontWeight.bold,
                                                         fontSize: 12,
+                                                        fontWeight:
+                                                            FontWeight.w600,
                                                         color: Colors.grey[600],
                                                       ),
                                                     ),
-                                                  ),
-                                                ],
+                                                  ],
+                                                ),
                                               ),
-                                            ),
-                                            const SizedBox(width: 14),
-                                            // After Photo Box
-                                            Expanded(
-                                              child: Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  _buildBeforeAfterBox(
-                                                    label: 'AFTER',
-                                                    imagePath: post[
-                                                        'after_image_path'],
-                                                    fallbackColor: const Color(
-                                                        0xFFD4F1E1), // deep green
-                                                  ),
-                                                  const SizedBox(height: 6),
-                                                  Center(
-                                                    child: Text(
-                                                      post['after_metric'],
-                                                      style:
-                                                          GoogleFonts.poppins(
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                        fontSize: 12,
-                                                        color: const Color(
-                                                            0xFF27AE60),
-                                                      ),
+                                              // Share Button
+                                              InkWell(
+                                                onTap: () {
+                                                  ScaffoldMessenger.of(context)
+                                                      .showSnackBar(
+                                                    SnackBar(
+                                                      content: Text(
+                                                          'Transformation link copied to clipboard!',
+                                                          style: GoogleFonts
+                                                              .poppins()),
+                                                      backgroundColor:
+                                                          const Color(
+                                                              0xFF2ECC71),
+                                                      behavior: SnackBarBehavior
+                                                          .floating,
                                                     ),
-                                                  ),
-                                                ],
+                                                  );
+                                                },
+                                                child: Row(
+                                                  children: [
+                                                    Icon(Icons.share_outlined,
+                                                        color: Colors.grey[600],
+                                                        size: 18),
+                                                  ],
+                                                ),
                                               ),
-                                            ),
-                                          ],
-                                        ),
-
-                                        const Divider(
-                                            height: 32, thickness: 1.2),
-
-                                        // Interactions Bar (Like, Comment, Share)
-                                        Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.spaceBetween,
-                                          children: [
-                                            // Like Button with pulse animation
-                                            LikeButtonAnimated(
-                                              isLiked: isLiked,
-                                              likesCount: post['likes'] as int,
-                                              onTap: () {
-                                                setState(() {
-                                                  post['is_liked'] = !isLiked;
-                                                  post['likes'] = isLiked
-                                                      ? (post['likes'] as int) -
-                                                          1
-                                                      : (post['likes'] as int) +
-                                                          1;
-                                                });
-                                              },
-                                            ),
-                                            // Comment Button
-                                            InkWell(
-                                              onTap: () =>
-                                                  _showCommentsBottomSheet(
-                                                      post),
-                                              child: Row(
-                                                children: [
-                                                  Icon(
-                                                      Icons
-                                                          .mode_comment_outlined,
-                                                      color: Colors.grey[600],
-                                                      size: 18),
-                                                  const SizedBox(width: 6),
-                                                  Text(
-                                                    (post['comments']
-                                                            as List<dynamic>)
-                                                        .length
-                                                        .toString(),
-                                                    style: GoogleFonts.poppins(
-                                                      fontSize: 12,
-                                                      fontWeight:
-                                                          FontWeight.w600,
-                                                      color: Colors.grey[600],
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                            // Share Button
-                                            InkWell(
-                                              onTap: () {
-                                                ScaffoldMessenger.of(context)
-                                                    .showSnackBar(
-                                                  SnackBar(
-                                                    content: Text(
-                                                        'Transformation link copied to clipboard!',
-                                                        style: GoogleFonts
-                                                            .poppins()),
-                                                    backgroundColor:
-                                                        const Color(0xFF2ECC71),
-                                                    behavior: SnackBarBehavior
-                                                        .floating,
-                                                  ),
-                                                );
-                                              },
-                                              child: Row(
-                                                children: [
-                                                  Icon(Icons.share_outlined,
-                                                      color: Colors.grey[600],
-                                                      size: 18),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ],
+                                            ],
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ),
-                              ),
-                            );
-                          },
-                          childCount: _posts.length,
+                              );
+                            },
+                            childCount: _posts.length,
+                          ),
                         ),
-                      ),
 
                       if (_isCommunityLoadingMore)
                         const SliverToBoxAdapter(
@@ -1922,11 +2034,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       child: imagePath != null
           ? ClipRRect(
               borderRadius: BorderRadius.circular(14),
-              child: Image.file(
-                File(imagePath),
-                fit: BoxFit.cover,
-                width: double.infinity,
-              ),
+              child: imagePath.startsWith('http')
+                  ? Image.network(
+                      imagePath,
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                      errorBuilder: (context, error, stackTrace) =>
+                          const Center(
+                        child: Icon(Icons.broken_image_rounded,
+                            color: Colors.grey),
+                      ),
+                    )
+                  : Image.file(
+                      File(imagePath),
+                      fit: BoxFit.cover,
+                      width: double.infinity,
+                    ),
             )
           : Center(
               child: Column(

@@ -10,6 +10,7 @@ import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/my_posts_screen.dart';
 import 'screens/food_analysis_screen.dart';
 import 'screens/add_daily_post_screen.dart';
 import 'screens/dm_screen.dart';
@@ -121,6 +122,9 @@ class MyApp extends StatelessWidget {
             break;
           case '/profile':
             builder = const ProfileScreen();
+            break;
+          case '/my_posts':
+            builder = const MyPostsScreen();
             break;
           case '/food_analysis':
             builder = const FoodAnalysisScreen();

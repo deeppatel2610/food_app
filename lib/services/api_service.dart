@@ -706,9 +706,10 @@ class ApiService {
         },
       );
 
-      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
-          ? response.data as Map<String, dynamic>
-          : <String, dynamic>{};
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
 
       if (response.statusCode == 200 && responseData['success'] == true) {
         return responseData['data'] is Map<String, dynamic>
@@ -746,15 +747,15 @@ class ApiService {
         },
       );
 
-      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
-          ? response.data as Map<String, dynamic>
-          : <String, dynamic>{};
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
 
       if (response.statusCode == 200 && responseData['success'] == true) {
         return responseData;
       } else {
-        final message =
-            responseData['message'] ?? 'Failed to reset password.';
+        final message = responseData['message'] ?? 'Failed to reset password.';
         throw ApiException(message, response.statusCode);
       }
     } on DioException catch (e) {
@@ -767,6 +768,442 @@ class ApiService {
     } catch (e) {
       throw ApiException(
           'An unexpected error occurred during reset password: $e');
+    }
+  }
+
+  // Get Community Feed using GET /community API
+  static Future<List<Map<String, dynamic>>> getCommunityFeed(
+      {int page = 1, int limit = 10, String? token}) async {
+    try {
+      String? authToken = token;
+      if (authToken == null || authToken.isEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        authToken = prefs.getString(accessTokenKey);
+      }
+
+      final response = await _dio.get(
+        'community',
+        queryParameters: {
+          'page': page,
+          'limit': limit,
+        },
+        options: Options(
+          headers: {
+            if (authToken != null && authToken.isNotEmpty)
+              'Authorization': 'Bearer $authToken',
+          },
+        ),
+      );
+
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
+
+      if (response.statusCode == 200 && responseData['success'] == true) {
+        final List<dynamic> list = responseData['data'] ?? [];
+        final String originUrl = _dio.options.baseUrl.replaceAll('/api/', '');
+
+        return list.map((item) {
+          final map = item as Map<String, dynamic>;
+
+          String beforeImg = map['beforeImagePath']?.toString() ?? '';
+          String afterImg = map['afterImagePath']?.toString() ?? '';
+
+          if (beforeImg.isNotEmpty && !beforeImg.startsWith('http')) {
+            beforeImg = '$originUrl/$beforeImg';
+          }
+          if (afterImg.isNotEmpty && !afterImg.startsWith('http')) {
+            afterImg = '$originUrl/$afterImg';
+          }
+
+          return {
+            'id': map['id'],
+            'caption': map['caption'] ?? '',
+            'before_metric': map['beforeMetric'] ?? '',
+            'after_metric': map['afterMetric'] ?? '',
+            'before_image_path': beforeImg,
+            'after_image_path': afterImg,
+            'likes': map['likes'] ?? 0,
+            'is_liked': map['isLiked'] ?? false,
+            'author_name': map['authorName'] ?? '',
+            'author_username': map['authorUsername'] ?? '',
+            'author_avatar_color': map['authorAvatarColor'] ?? 0xFF2ECC71,
+            'comments': (map['comments'] as List? ?? []).map((c) {
+              final commentMap = c as Map<String, dynamic>;
+              return {
+                'id': commentMap['id'],
+                'author': commentMap['author'] ?? '',
+                'username': commentMap['username'] ?? '',
+                'text': commentMap['content'] ?? commentMap['text'] ?? '',
+                'time': commentMap['time'] ?? 'Just now',
+              };
+            }).toList(),
+          };
+        }).toList();
+      } else if (response.statusCode == 401) {
+        final newToken = await refreshToken();
+        return getCommunityFeed(page: page, limit: limit, token: newToken);
+      } else {
+        final message =
+            responseData['message'] ?? 'Failed to retrieve community feed.';
+        throw ApiException(message, response.statusCode);
+      }
+    } on DioException catch (e) {
+      if (e.response != null && e.response?.statusCode == 401) {
+        try {
+          final newToken = await refreshToken();
+          return getCommunityFeed(page: page, limit: limit, token: newToken);
+        } catch (_) {}
+      }
+      if (e.response != null && e.response?.data is Map) {
+        final msg = e.response?.data['message'] ?? 'Server error occurred.';
+        throw ApiException(msg, e.response?.statusCode);
+      } else {
+        throw ApiException(e.message ?? 'Network error occurred');
+      }
+    } catch (e) {
+      if (e is AuthException) rethrow;
+      throw ApiException(
+          'An unexpected error occurred while fetching community feed: $e');
+    }
+  }
+
+  // Get User's Own Posts using GET /community/my-posts API
+  static Future<List<Map<String, dynamic>>> getMyPosts([String? token]) async {
+    try {
+      String? authToken = token;
+      if (authToken == null || authToken.isEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        authToken = prefs.getString(accessTokenKey);
+      }
+
+      final response = await _dio.get(
+        'community/my-posts',
+        options: Options(
+          headers: {
+            if (authToken != null && authToken.isNotEmpty)
+              'Authorization': 'Bearer $authToken',
+          },
+        ),
+      );
+
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
+
+      if (response.statusCode == 200 && responseData['success'] == true) {
+        final List<dynamic> list = responseData['data'] ?? [];
+        final String originUrl = _dio.options.baseUrl.replaceAll('/api/', '');
+
+        return list.map((item) {
+          final map = item as Map<String, dynamic>;
+
+          String beforeImg = map['beforeImagePath']?.toString() ?? '';
+          String afterImg = map['afterImagePath']?.toString() ?? '';
+
+          if (beforeImg.isNotEmpty && !beforeImg.startsWith('http')) {
+            beforeImg = '$originUrl/$beforeImg';
+          }
+          if (afterImg.isNotEmpty && !afterImg.startsWith('http')) {
+            afterImg = '$originUrl/$afterImg';
+          }
+
+          return {
+            'id': map['id'],
+            'caption': map['caption'] ?? '',
+            'before_metric': map['beforeMetric'] ?? '',
+            'after_metric': map['afterMetric'] ?? '',
+            'before_image_path': beforeImg,
+            'after_image_path': afterImg,
+            'likes': map['likes'] ?? 0,
+            'is_liked': map['isLiked'] ?? false,
+            'author_name': map['authorName'] ?? '',
+            'author_username': map['authorUsername'] ?? '',
+            'author_avatar_color': map['authorAvatarColor'] ?? 0xFF2ECC71,
+            'comments': (map['comments'] as List? ?? []).map((c) {
+              final commentMap = c as Map<String, dynamic>;
+              return {
+                'id': commentMap['id'],
+                'author': commentMap['author'] ?? '',
+                'username': commentMap['username'] ?? '',
+                'text': commentMap['content'] ?? commentMap['text'] ?? '',
+                'time': commentMap['time'] ?? 'Just now',
+              };
+            }).toList(),
+          };
+        }).toList();
+      } else if (response.statusCode == 401) {
+        final newToken = await refreshToken();
+        return getMyPosts(newToken);
+      } else {
+        final message =
+            responseData['message'] ?? 'Failed to retrieve your posts.';
+        throw ApiException(message, response.statusCode);
+      }
+    } on DioException catch (e) {
+      if (e.response != null && e.response?.statusCode == 401) {
+        try {
+          final newToken = await refreshToken();
+          return getMyPosts(newToken);
+        } catch (_) {}
+      }
+      if (e.response != null && e.response?.data is Map) {
+        final msg = e.response?.data['message'] ?? 'Server error occurred.';
+        throw ApiException(msg, e.response?.statusCode);
+      } else {
+        throw ApiException(e.message ?? 'Network error occurred');
+      }
+    } catch (e) {
+      if (e is AuthException) rethrow;
+      throw ApiException(
+          'An unexpected error occurred while fetching your posts: $e');
+    }
+  }
+
+  // Publish Community Post using POST /community API
+  static Future<Map<String, dynamic>> publishCommunityPost({
+    required String caption,
+    required String beforeMetric,
+    required String afterMetric,
+    required String beforeImagePath,
+    required String afterImagePath,
+    String? token,
+  }) async {
+    try {
+      String? authToken = token;
+      if (authToken == null || authToken.isEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        authToken = prefs.getString(accessTokenKey);
+      }
+
+      final beforeFileName = beforeImagePath.split(RegExp(r'[/\\]')).last;
+      final afterFileName = afterImagePath.split(RegExp(r'[/\\]')).last;
+
+      final formData = FormData.fromMap({
+        'caption': caption,
+        'before_metric': beforeMetric,
+        'after_metric': afterMetric,
+        'before_image': await MultipartFile.fromFile(
+          beforeImagePath,
+          filename: beforeFileName,
+        ),
+        'after_image': await MultipartFile.fromFile(
+          afterImagePath,
+          filename: afterFileName,
+        ),
+      });
+
+      final response = await _dio.post(
+        'community',
+        data: formData,
+        options: Options(
+          headers: {
+            if (authToken != null && authToken.isNotEmpty)
+              'Authorization': 'Bearer $authToken',
+          },
+        ),
+      );
+
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
+
+      if ((response.statusCode == 200 || response.statusCode == 201) &&
+          responseData['success'] == true) {
+        final map = responseData['data'] ?? {};
+        final String originUrl = _dio.options.baseUrl.replaceAll('/api/', '');
+
+        String beforeImg = map['beforeImage']?.toString() ?? '';
+        String afterImg = map['afterImage']?.toString() ?? '';
+
+        if (beforeImg.isNotEmpty && !beforeImg.startsWith('http')) {
+          beforeImg = '$originUrl/$beforeImg';
+        }
+        if (afterImg.isNotEmpty && !afterImg.startsWith('http')) {
+          afterImg = '$originUrl/$afterImg';
+        }
+
+        // We fetch current user details to return the correct author properties
+        final prefs = await SharedPreferences.getInstance();
+        final userStr = prefs.getString(userDataKey);
+        String name = 'You';
+        String username = 'you';
+        if (userStr != null && userStr.isNotEmpty) {
+          try {
+            final user = jsonDecode(userStr);
+            name = '${user['first_name'] ?? 'You'} ${user['last_name'] ?? ''}'
+                .trim();
+            username = user['username'] ?? 'you';
+          } catch (_) {}
+        }
+
+        return {
+          'id': map['id'],
+          'caption': map['caption'] ?? caption,
+          'before_metric': map['beforeMetric'] ?? beforeMetric,
+          'after_metric': map['afterMetric'] ?? afterMetric,
+          'before_image_path': beforeImg,
+          'after_image_path': afterImg,
+          'likes': 0,
+          'is_liked': false,
+          'author_name': name,
+          'author_username': username,
+          'author_avatar_color': 0xFF2ECC71,
+          'comments': [],
+        };
+      } else if (response.statusCode == 401) {
+        final newToken = await refreshToken();
+        return publishCommunityPost(
+          caption: caption,
+          beforeMetric: beforeMetric,
+          afterMetric: afterMetric,
+          beforeImagePath: beforeImagePath,
+          afterImagePath: afterImagePath,
+          token: newToken,
+        );
+      } else {
+        final message = responseData['message'] ?? 'Failed to publish post.';
+        throw ApiException(message, response.statusCode);
+      }
+    } on DioException catch (e) {
+      if (e.response != null && e.response?.statusCode == 401) {
+        try {
+          final newToken = await refreshToken();
+          return publishCommunityPost(
+            caption: caption,
+            beforeMetric: beforeMetric,
+            afterMetric: afterMetric,
+            beforeImagePath: beforeImagePath,
+            afterImagePath: afterImagePath,
+            token: newToken,
+          );
+        } catch (_) {}
+      }
+      if (e.response != null && e.response?.data is Map) {
+        final msg = e.response?.data['message'] ?? 'Server error occurred.';
+        throw ApiException(msg, e.response?.statusCode);
+      } else {
+        throw ApiException(e.message ?? 'Network error occurred');
+      }
+    } catch (e) {
+      if (e is AuthException) rethrow;
+      throw ApiException(
+          'An unexpected error occurred while publishing post: $e');
+    }
+  }
+
+  // Toggle Like Status of a Community Post using POST /community/:id/like API
+  static Future<Map<String, dynamic>> toggleLikePost(dynamic postId,
+      [String? token]) async {
+    try {
+      String? authToken = token;
+      if (authToken == null || authToken.isEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        authToken = prefs.getString(accessTokenKey);
+      }
+
+      final response = await _dio.post(
+        'community/$postId/like',
+        options: Options(
+          headers: {
+            if (authToken != null && authToken.isNotEmpty)
+              'Authorization': 'Bearer $authToken',
+          },
+        ),
+      );
+
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
+
+      if (response.statusCode == 200 && responseData['success'] == true) {
+        return responseData['data'] ?? {};
+      } else if (response.statusCode == 401) {
+        final newToken = await refreshToken();
+        return toggleLikePost(postId, newToken);
+      } else {
+        final message = responseData['message'] ?? 'Failed to update like.';
+        throw ApiException(message, response.statusCode);
+      }
+    } on DioException catch (e) {
+      if (e.response != null && e.response?.statusCode == 401) {
+        try {
+          final newToken = await refreshToken();
+          return toggleLikePost(postId, newToken);
+        } catch (_) {}
+      }
+      if (e.response != null && e.response?.data is Map) {
+        final msg = e.response?.data['message'] ?? 'Server error occurred.';
+        throw ApiException(msg, e.response?.statusCode);
+      } else {
+        throw ApiException(e.message ?? 'Network error occurred');
+      }
+    } catch (e) {
+      if (e is AuthException) rethrow;
+      throw ApiException('An unexpected error occurred while liking post: $e');
+    }
+  }
+
+  // Add Comment to a Community Post using POST /community/:id/comment API
+  static Future<Map<String, dynamic>> addCommentToPost(
+      dynamic postId, String content,
+      [String? token]) async {
+    try {
+      String? authToken = token;
+      if (authToken == null || authToken.isEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        authToken = prefs.getString(accessTokenKey);
+      }
+
+      final response = await _dio.post(
+        'community/$postId/comment',
+        data: {
+          'content': content,
+        },
+        options: Options(
+          headers: {
+            if (authToken != null && authToken.isNotEmpty)
+              'Authorization': 'Bearer $authToken',
+          },
+        ),
+      );
+
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
+
+      if ((response.statusCode == 200 || response.statusCode == 201) &&
+          responseData['success'] == true) {
+        return responseData['data'] ?? {};
+      } else if (response.statusCode == 401) {
+        final newToken = await refreshToken();
+        return addCommentToPost(postId, content, newToken);
+      } else {
+        final message = responseData['message'] ?? 'Failed to post comment.';
+        throw ApiException(message, response.statusCode);
+      }
+    } on DioException catch (e) {
+      if (e.response != null && e.response?.statusCode == 401) {
+        try {
+          final newToken = await refreshToken();
+          return addCommentToPost(postId, content, newToken);
+        } catch (_) {}
+      }
+      if (e.response != null && e.response?.data is Map) {
+        final msg = e.response?.data['message'] ?? 'Server error occurred.';
+        throw ApiException(msg, e.response?.statusCode);
+      } else {
+        throw ApiException(e.message ?? 'Network error occurred');
+      }
+    } catch (e) {
+      if (e is AuthException) rethrow;
+      throw ApiException(
+          'An unexpected error occurred while posting comment: $e');
     }
   }
 

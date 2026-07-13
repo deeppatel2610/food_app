@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/env_variables.dart';
 import '../utils/shared_preferences_key.dart';
+import '../utils/api_endpoints.dart';
 import 'api_exceptions.dart';
 import '../models/user_model.dart';
 import '../models/food_analysis_model.dart';
@@ -40,7 +41,7 @@ class ApiService {
       _dioInstance!.interceptors.add(
         InterceptorsWrapper(
           onRequest: (options, handler) async {
-            if (!options.path.startsWith('auth/')) {
+            if (!options.path.startsWith(ApiEndpoints.authPrefix)) {
               final prefs = await SharedPreferences.getInstance();
               final token = prefs.getString(accessTokenKey);
               if (token != null && token.isNotEmpty) {
@@ -51,10 +52,11 @@ class ApiService {
           },
           onError: (DioException e, handler) async {
             if (e.response?.statusCode == 401) {
-              if (e.requestOptions.path != 'auth/refresh') {
+              if (e.requestOptions.path != ApiEndpoints.refresh) {
                 try {
                   final newToken = await refreshToken();
-                  e.requestOptions.headers['Authorization'] = 'Bearer $newToken';
+                  e.requestOptions.headers['Authorization'] =
+                      'Bearer $newToken';
                   final response = await _dioInstance!.fetch(e.requestOptions);
                   return handler.resolve(response);
                 } catch (refreshError) {
@@ -122,7 +124,7 @@ class ApiService {
 
       try {
         final response = await _dio.post(
-          'auth/refresh',
+          ApiEndpoints.refresh,
           data: {
             'refreshToken': savedRefreshToken,
           },
@@ -144,16 +146,19 @@ class ApiService {
           }
         } else {
           await logout();
-          final message = responseData['message'] ?? 'Session expired. Please log in again.';
+          final message = responseData['message'] ??
+              'Session expired. Please log in again.';
           throw AuthException(message);
         }
       } on DioException catch (e) {
         if (e.response != null &&
             (e.response?.statusCode == 403 || e.response?.statusCode == 401)) {
           await logout();
-          throw AuthException('Refresh token expired or invalid. Please log in again.');
+          throw AuthException(
+              'Refresh token expired or invalid. Please log in again.');
         } else {
-          throw NetworkException('Network error occurred while refreshing token.');
+          throw NetworkException(
+              'Network error occurred while refreshing token.');
         }
       } catch (e) {
         if (e is AuthException) rethrow;
@@ -170,9 +175,10 @@ class ApiService {
   }
 
   // Get User Details using GET /user API endpoint (ID is read from JWT token)
-  static Future<Map<String, dynamic>> getUserDetails(dynamic id, [String? token]) async {
+  static Future<Map<String, dynamic>> getUserDetails(dynamic id,
+      [String? token]) async {
     try {
-      final response = await _dio.get('user');
+      final response = await _dio.get(ApiEndpoints.user);
       final responseData = response.data is Map<String, dynamic>
           ? response.data as Map<String, dynamic>
           : {};
@@ -187,7 +193,8 @@ class ApiService {
 
         return user;
       } else {
-        final message = responseData['message'] ?? 'Failed to fetch user details.';
+        final message =
+            responseData['message'] ?? 'Failed to fetch user details.';
         throw ApiException(message, response.statusCode);
       }
     } catch (e, stack) {
@@ -196,10 +203,11 @@ class ApiService {
   }
 
   // 1. Real Login Method using Dio connecting to Backend API
-  static Future<Map<String, dynamic>> login(String identifier, String password) async {
+  static Future<Map<String, dynamic>> login(
+      String identifier, String password) async {
     try {
       final response = await _dio.post(
-        'auth/login',
+        ApiEndpoints.login,
         data: {
           'identifier': identifier,
           'password': password,
@@ -236,7 +244,8 @@ class ApiService {
           'user': user,
         };
       } else {
-        final message = responseData['message'] ?? 'Login failed. Please check your credentials.';
+        final message = responseData['message'] ??
+            'Login failed. Please check your credentials.';
         throw ApiException(message, response.statusCode);
       }
     } catch (e, stack) {
@@ -270,7 +279,7 @@ class ApiService {
           healthProblemList.isNotEmpty ? healthProblemList.join(', ') : 'None';
 
       final response = await _dio.post(
-        'auth/register',
+        ApiEndpoints.register,
         data: {
           'first_name': firstName,
           'firstName': firstName,
@@ -297,11 +306,13 @@ class ApiService {
         final user = UserModel.fromJson(responseData['data'] ?? {}).toJson();
         return {
           'status': 'success',
-          'message': responseData['message'] ?? 'Account registered successfully!',
+          'message':
+              responseData['message'] ?? 'Account registered successfully!',
           'user': user,
         };
       } else {
-        final message = responseData['message'] ?? 'Registration failed. Please check inputs.';
+        final message = responseData['message'] ??
+            'Registration failed. Please check inputs.';
         throw ApiException(message, response.statusCode);
       }
     } catch (e, stack) {
@@ -310,7 +321,8 @@ class ApiService {
   }
 
   // 3. Real Image Scan Analysis Method connecting to Backend API
-  static Future<Map<String, dynamic>> analyzeFoodImage(String imagePath, [String? token]) async {
+  static Future<Map<String, dynamic>> analyzeFoodImage(String imagePath,
+      [String? token]) async {
     if (imagePath.isEmpty) {
       throw ValidationException('No image path provided for analysis.');
     }
@@ -325,7 +337,7 @@ class ApiService {
       });
 
       final response = await _dio.post(
-        'food/analyze',
+        ApiEndpoints.foodAnalyze,
         data: formData,
       );
 
@@ -338,7 +350,8 @@ class ApiService {
         final data = responsePayload['analysis'] ?? {};
         final isFood = data['isFood'] ?? data['is_food'] ?? false;
         if (!isFood) {
-          final msg = data['message'] ?? 'The uploaded image does not appear to contain any food or food package.';
+          final msg = data['message'] ??
+              'The uploaded image does not appear to contain any food or food package.';
           throw ValidationException(msg);
         }
 
@@ -368,7 +381,7 @@ class ApiService {
   }) async {
     try {
       final response = await _dio.get(
-        'food/history',
+        ApiEndpoints.foodHistory,
         queryParameters: {
           if (isEat != null) 'isEat': isEat,
           if (date != null) 'date': date,
@@ -403,7 +416,8 @@ class ApiService {
 
         return history;
       } else {
-        final message = responseData['message'] ?? 'Failed to retrieve food analysis history.';
+        final message = responseData['message'] ??
+            'Failed to retrieve food analysis history.';
         throw ApiException(message, response.statusCode);
       }
     } catch (e, stack) {
@@ -412,10 +426,12 @@ class ApiService {
   }
 
   // Update is_eat status of a food analysis record using PATCH /food/history/{id}
-  static Future<Map<String, dynamic>> updateFoodIsEatStatus(dynamic id, bool isEat, [String? token]) async {
+  static Future<Map<String, dynamic>> updateFoodIsEatStatus(
+      dynamic id, bool isEat,
+      [String? token]) async {
     try {
       final response = await _dio.patch(
-        'food/history/$id',
+        ApiEndpoints.foodHistoryItem(id),
         data: {
           'is_eat': isEat,
           'isEat': isEat,
@@ -430,7 +446,8 @@ class ApiService {
         final data = responseData['data'] ?? {};
         return data is Map<String, dynamic> ? data : {};
       } else {
-        final message = responseData['message'] ?? 'Failed to update track status.';
+        final message =
+            responseData['message'] ?? 'Failed to update track status.';
         throw ApiException(message, response.statusCode);
       }
     } catch (e, stack) {
@@ -453,7 +470,7 @@ class ApiService {
   }) async {
     try {
       final response = await _dio.put(
-        'user',
+        ApiEndpoints.user,
         data: {
           'first_name': firstName,
           'firstName': firstName,
@@ -485,7 +502,8 @@ class ApiService {
 
         return user;
       } else {
-        final message = responseData['message'] ?? 'Failed to update user profile.';
+        final message =
+            responseData['message'] ?? 'Failed to update user profile.';
         throw ApiException(message, response.statusCode);
       }
     } catch (e, stack) {
@@ -497,22 +515,24 @@ class ApiService {
   static Future<Map<String, dynamic>> forgotPassword(String email) async {
     try {
       final response = await _dio.post(
-        'auth/forgot-password',
+        ApiEndpoints.forgotPassword,
         data: {
           'email': email,
         },
       );
 
-      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
-          ? response.data as Map<String, dynamic>
-          : <String, dynamic>{};
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
 
       if (responseData['success'] == true) {
         return responseData['data'] is Map<String, dynamic>
             ? responseData['data'] as Map<String, dynamic>
             : <String, dynamic>{};
       } else {
-        final message = responseData['message'] ?? 'Failed to send password reset token.';
+        final message =
+            responseData['message'] ?? 'Failed to send password reset token.';
         throw ApiException(message, response.statusCode);
       }
     } catch (e, stack) {
@@ -527,16 +547,17 @@ class ApiService {
   }) async {
     try {
       final response = await _dio.post(
-        'auth/reset-password',
+        ApiEndpoints.resetPassword,
         data: {
           'token': token,
           'password': password,
         },
       );
 
-      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
-          ? response.data as Map<String, dynamic>
-          : <String, dynamic>{};
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
 
       if (responseData['success'] == true) {
         return responseData;
@@ -550,19 +571,21 @@ class ApiService {
   }
 
   // Get Community Feed using GET /community API
-  static Future<List<Map<String, dynamic>>> getCommunityFeed({int page = 1, int limit = 10, String? token}) async {
+  static Future<List<Map<String, dynamic>>> getCommunityFeed(
+      {int page = 1, int limit = 10, String? token}) async {
     try {
       final response = await _dio.get(
-        'community',
+        ApiEndpoints.community,
         queryParameters: {
           'page': page,
           'limit': limit,
         },
       );
 
-      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
-          ? response.data as Map<String, dynamic>
-          : <String, dynamic>{};
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
 
       if (responseData['success'] == true) {
         final List<dynamic> list = responseData['data'] ?? [];
@@ -606,7 +629,8 @@ class ApiService {
           };
         }).toList();
       } else {
-        final message = responseData['message'] ?? 'Failed to retrieve community feed.';
+        final message =
+            responseData['message'] ?? 'Failed to retrieve community feed.';
         throw ApiException(message, response.statusCode);
       }
     } catch (e, stack) {
@@ -617,11 +641,12 @@ class ApiService {
   // Get User's Own Posts using GET /community/my-posts API
   static Future<List<Map<String, dynamic>>> getMyPosts([String? token]) async {
     try {
-      final response = await _dio.get('community/my-posts');
+      final response = await _dio.get(ApiEndpoints.myPosts);
 
-      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
-          ? response.data as Map<String, dynamic>
-          : <String, dynamic>{};
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
 
       if (responseData['success'] == true) {
         final List<dynamic> list = responseData['data'] ?? [];
@@ -665,7 +690,8 @@ class ApiService {
           };
         }).toList();
       } else {
-        final message = responseData['message'] ?? 'Failed to retrieve your posts.';
+        final message =
+            responseData['message'] ?? 'Failed to retrieve your posts.';
         throw ApiException(message, response.statusCode);
       }
     } catch (e, stack) {
@@ -701,13 +727,14 @@ class ApiService {
       });
 
       final response = await _dio.post(
-        'community',
+        ApiEndpoints.community,
         data: formData,
       );
 
-      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
-          ? response.data as Map<String, dynamic>
-          : <String, dynamic>{};
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
 
       if (responseData['success'] == true) {
         final map = responseData['data'] ?? {};
@@ -731,7 +758,8 @@ class ApiService {
         if (userStr != null && userStr.isNotEmpty) {
           try {
             final user = jsonDecode(userStr);
-            name = '${user['first_name'] ?? 'You'} ${user['last_name'] ?? ''}'.trim();
+            name = '${user['first_name'] ?? 'You'} ${user['last_name'] ?? ''}'
+                .trim();
             username = user['username'] ?? 'you';
           } catch (_) {}
         }
@@ -760,13 +788,15 @@ class ApiService {
   }
 
   // Toggle Like Status of a Community Post using POST /community/:id/like API
-  static Future<Map<String, dynamic>> toggleLikePost(dynamic postId, [String? token]) async {
+  static Future<Map<String, dynamic>> toggleLikePost(dynamic postId,
+      [String? token]) async {
     try {
-      final response = await _dio.post('community/$postId/like');
+      final response = await _dio.post(ApiEndpoints.likePost(postId));
 
-      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
-          ? response.data as Map<String, dynamic>
-          : <String, dynamic>{};
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
 
       if (responseData['success'] == true) {
         return responseData['data'] ?? {};
@@ -780,18 +810,21 @@ class ApiService {
   }
 
   // Add Comment to a Community Post using POST /community/:id/comment API
-  static Future<Map<String, dynamic>> addCommentToPost(dynamic postId, String content, [String? token]) async {
+  static Future<Map<String, dynamic>> addCommentToPost(
+      dynamic postId, String content,
+      [String? token]) async {
     try {
       final response = await _dio.post(
-        'community/$postId/comment',
+        ApiEndpoints.commentPost(postId),
         data: {
           'content': content,
         },
       );
 
-      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
-          ? response.data as Map<String, dynamic>
-          : <String, dynamic>{};
+      final Map<String, dynamic> responseData =
+          response.data is Map<String, dynamic>
+              ? response.data as Map<String, dynamic>
+              : <String, dynamic>{};
 
       if (responseData['success'] == true) {
         return responseData['data'] ?? {};

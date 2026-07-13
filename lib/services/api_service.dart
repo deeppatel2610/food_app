@@ -9,7 +9,6 @@ import 'api_exceptions.dart';
 import '../models/user_model.dart';
 import '../models/food_analysis_model.dart';
 
-
 export 'api_exceptions.dart';
 
 class ApiService {
@@ -35,7 +34,41 @@ class ApiService {
           connectTimeout: const Duration(seconds: 30),
           receiveTimeout: const Duration(seconds: 30),
           headers: {'Content-Type': 'application/json'},
-          validateStatus: (status) => status != null && status < 500,
+        ),
+      );
+
+      _dioInstance!.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) async {
+            if (!options.path.startsWith('auth/')) {
+              final prefs = await SharedPreferences.getInstance();
+              final token = prefs.getString(accessTokenKey);
+              if (token != null && token.isNotEmpty) {
+                options.headers['Authorization'] = 'Bearer $token';
+              }
+            }
+            return handler.next(options);
+          },
+          onError: (DioException e, handler) async {
+            if (e.response?.statusCode == 401) {
+              if (e.requestOptions.path != 'auth/refresh') {
+                try {
+                  final newToken = await refreshToken();
+                  e.requestOptions.headers['Authorization'] = 'Bearer $newToken';
+                  final response = await _dioInstance!.fetch(e.requestOptions);
+                  return handler.resolve(response);
+                } catch (refreshError) {
+                  return handler.next(DioException(
+                    requestOptions: e.requestOptions,
+                    error: refreshError,
+                    response: e.response,
+                    type: e.type,
+                  ));
+                }
+              }
+            }
+            return handler.next(e);
+          },
         ),
       );
     }
@@ -70,85 +103,81 @@ class ApiService {
     await prefs.remove(userDataKey);
   }
 
+  static Future<String>? _refreshFuture;
+
   // Refresh Access Token API using POST /auth/refresh
   static Future<String> refreshToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedRefreshToken = prefs.getString(refreshTokenKey);
-
-    if (savedRefreshToken == null || savedRefreshToken.isEmpty) {
-      await logout();
-      throw AuthException('No refresh token found. Please log in again.');
+    if (_refreshFuture != null) {
+      return _refreshFuture!;
     }
 
-    try {
-      final response = await _dio.post(
-        'auth/refresh',
-        data: {
-          'refreshToken': savedRefreshToken,
-        },
-      );
+    final future = () async {
+      final prefs = await SharedPreferences.getInstance();
+      final savedRefreshToken = prefs.getString(refreshTokenKey);
 
-      final responseData = response.data is Map<String, dynamic>
-          ? response.data as Map<String, dynamic>
-          : {};
+      if (savedRefreshToken == null || savedRefreshToken.isEmpty) {
+        await logout();
+        throw AuthException('No refresh token found. Please log in again.');
+      }
 
-      if (response.statusCode == 200 && responseData['success'] == true) {
-        final data = responseData['data'] ?? {};
-        final newAccessToken = data['accessToken']?.toString() ?? '';
+      try {
+        final response = await _dio.post(
+          'auth/refresh',
+          data: {
+            'refreshToken': savedRefreshToken,
+          },
+        );
 
-        if (newAccessToken.isNotEmpty) {
-          await prefs.setString(accessTokenKey, newAccessToken);
-          return newAccessToken;
+        final responseData = response.data is Map<String, dynamic>
+            ? response.data as Map<String, dynamic>
+            : {};
+
+        if (response.statusCode == 200 && responseData['success'] == true) {
+          final data = responseData['data'] ?? {};
+          final newAccessToken = data['accessToken']?.toString() ?? '';
+
+          if (newAccessToken.isNotEmpty) {
+            await prefs.setString(accessTokenKey, newAccessToken);
+            return newAccessToken;
+          } else {
+            throw AuthException('Invalid access token returned from server.');
+          }
         } else {
-          throw AuthException('Invalid access token returned from server.');
+          await logout();
+          final message = responseData['message'] ?? 'Session expired. Please log in again.';
+          throw AuthException(message);
         }
-      } else {
-        await logout();
-        final message =
-            responseData['message'] ?? 'Session expired. Please log in again.';
-        throw AuthException(message);
+      } on DioException catch (e) {
+        if (e.response != null &&
+            (e.response?.statusCode == 403 || e.response?.statusCode == 401)) {
+          await logout();
+          throw AuthException('Refresh token expired or invalid. Please log in again.');
+        } else {
+          throw NetworkException('Network error occurred while refreshing token.');
+        }
+      } catch (e) {
+        if (e is AuthException) rethrow;
+        throw ApiException('Unexpected error while refreshing token: $e');
       }
-    } on DioException catch (e) {
-      if (e.response != null &&
-          (e.response?.statusCode == 403 || e.response?.statusCode == 401)) {
-        await logout();
-        throw AuthException(
-            'Refresh token expired or invalid. Please log in again.');
-      } else {
-        throw NetworkException(
-            'Network error occurred while refreshing token.');
-      }
-    } catch (e) {
-      if (e is AuthException) rethrow;
-      throw ApiException('Unexpected error while refreshing token: $e');
+    }();
+
+    _refreshFuture = future;
+    try {
+      return await future;
+    } finally {
+      _refreshFuture = null;
     }
   }
 
   // Get User Details using GET /user API endpoint (ID is read from JWT token)
-  static Future<Map<String, dynamic>> getUserDetails(dynamic id,
-      [String? token]) async {
+  static Future<Map<String, dynamic>> getUserDetails(dynamic id, [String? token]) async {
     try {
-      String? authToken = token;
-      if (authToken == null || authToken.isEmpty) {
-        final prefs = await SharedPreferences.getInstance();
-        authToken = prefs.getString(accessTokenKey);
-      }
-
-      final response = await _dio.get(
-        'user',
-        options: Options(
-          headers: {
-            if (authToken != null && authToken.isNotEmpty)
-              'Authorization': 'Bearer $authToken',
-          },
-        ),
-      );
-
+      final response = await _dio.get('user');
       final responseData = response.data is Map<String, dynamic>
           ? response.data as Map<String, dynamic>
           : {};
 
-      if (response.statusCode == 200 && responseData['success'] == true) {
+      if (responseData['success'] == true) {
         final rawUser = responseData['data'] ?? {};
         final user = UserModel.fromJson(rawUser).toJson();
 
@@ -157,38 +186,17 @@ class ApiService {
         await prefs.setString(userDataKey, jsonEncode(user));
 
         return user;
-      } else if (response.statusCode == 401) {
-        // Automatically attempt token refresh on 401 Unauthorized
-        final newToken = await refreshToken();
-        return getUserDetails(id, newToken);
       } else {
-        final message =
-            responseData['message'] ?? 'Failed to fetch user details.';
+        final message = responseData['message'] ?? 'Failed to fetch user details.';
         throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.statusCode == 401) {
-        try {
-          final newToken = await refreshToken();
-          return getUserDetails(id, newToken);
-        } catch (_) {}
-      }
-      if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ?? 'Server error occurred.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(e.message ?? 'Network error occurred');
-      }
-    } catch (e) {
-      if (e is AuthException) rethrow;
-      throw ApiException(
-          'An unexpected error occurred while fetching profile: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
   // 1. Real Login Method using Dio connecting to Backend API
-  static Future<Map<String, dynamic>> login(
-      String identifier, String password) async {
+  static Future<Map<String, dynamic>> login(String identifier, String password) async {
     try {
       final response = await _dio.post(
         'auth/login',
@@ -202,7 +210,7 @@ class ApiService {
           ? response.data as Map<String, dynamic>
           : {};
 
-      if (response.statusCode == 200 && responseData['success'] == true) {
+      if (responseData['success'] == true) {
         final data = responseData['data'] ?? {};
         final accessToken = data['accessToken'] ?? '';
         final refreshToken = data['refreshToken'] ?? '';
@@ -219,7 +227,7 @@ class ApiService {
           user = UserModel.fromJson(data['user']).toJson();
           await prefs.setString(userDataKey, jsonEncode(user));
         } else if (userId != null) {
-          user = await getUserDetails(userId, accessToken);
+          user = await getUserDetails(userId);
         }
 
         return {
@@ -228,33 +236,11 @@ class ApiService {
           'user': user,
         };
       } else {
-        final message = responseData['message'] ??
-            'Login failed. Please check your credentials.';
-        if (response.statusCode == 401) {
-          throw AuthException(message);
-        } else if (response.statusCode == 400) {
-          throw ValidationException(message);
-        } else {
-          throw ApiException(message, response.statusCode);
-        }
+        final message = responseData['message'] ?? 'Login failed. Please check your credentials.';
+        throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.type == DioExceptionType.connectionTimeout ||
-          e.type == DioExceptionType.sendTimeout ||
-          e.type == DioExceptionType.receiveTimeout ||
-          e.type == DioExceptionType.connectionError) {
-        throw NetworkException(
-            'Unable to connect to backend server. Please check your network connection.');
-      } else if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ?? 'Server error occurred.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(e.message ?? 'Network error occurred');
-      }
-    } on ApiException {
-      rethrow;
-    } catch (e) {
-      throw ApiException('An unexpected error occurred during login: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
@@ -307,59 +293,29 @@ class ApiService {
           ? response.data as Map<String, dynamic>
           : {};
 
-      if ((response.statusCode == 200 || response.statusCode == 201) &&
-          responseData['success'] == true) {
+      if (responseData['success'] == true) {
         final user = UserModel.fromJson(responseData['data'] ?? {}).toJson();
         return {
           'status': 'success',
-          'message':
-              responseData['message'] ?? 'Account registered successfully!',
+          'message': responseData['message'] ?? 'Account registered successfully!',
           'user': user,
         };
       } else {
-        final message = responseData['message'] ??
-            'Registration failed. Please check inputs.';
-        if (response.statusCode == 400) {
-          throw ValidationException(message);
-        } else {
-          throw ApiException(message, response.statusCode);
-        }
+        final message = responseData['message'] ?? 'Registration failed. Please check inputs.';
+        throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.type == DioExceptionType.connectionTimeout ||
-          e.type == DioExceptionType.sendTimeout ||
-          e.type == DioExceptionType.receiveTimeout ||
-          e.type == DioExceptionType.connectionError) {
-        throw NetworkException(
-            'Unable to connect to backend server. Please check your network connection.');
-      } else if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ?? 'Server error occurred.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(e.message ?? 'Network error occurred');
-      }
-    } on ApiException {
-      rethrow;
-    } catch (e) {
-      throw ApiException(
-          'An unexpected error occurred during registration: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
   // 3. Real Image Scan Analysis Method connecting to Backend API
-  static Future<Map<String, dynamic>> analyzeFoodImage(String imagePath,
-      [String? token]) async {
+  static Future<Map<String, dynamic>> analyzeFoodImage(String imagePath, [String? token]) async {
     if (imagePath.isEmpty) {
       throw ValidationException('No image path provided for analysis.');
     }
 
     try {
-      String? authToken = token;
-      if (authToken == null || authToken.isEmpty) {
-        final prefs = await SharedPreferences.getInstance();
-        authToken = prefs.getString(accessTokenKey);
-      }
-
       final fileName = imagePath.split(RegExp(r'[/\\]')).last;
       final formData = FormData.fromMap({
         'image': await MultipartFile.fromFile(
@@ -371,25 +327,18 @@ class ApiService {
       final response = await _dio.post(
         'food/analyze',
         data: formData,
-        options: Options(
-          headers: {
-            if (authToken != null && authToken.isNotEmpty)
-              'Authorization': 'Bearer $authToken',
-          },
-        ),
       );
 
       final responseData = response.data is Map<String, dynamic>
           ? response.data as Map<String, dynamic>
           : {};
 
-      if (response.statusCode == 200 && responseData['success'] == true) {
+      if (responseData['success'] == true) {
         final responsePayload = responseData['data'] ?? {};
         final data = responsePayload['analysis'] ?? {};
         final isFood = data['isFood'] ?? data['is_food'] ?? false;
         if (!isFood) {
-          final msg = data['message'] ??
-              'The uploaded image does not appear to contain any food or food package.';
+          final msg = data['message'] ?? 'The uploaded image does not appear to contain any food or food package.';
           throw ValidationException(msg);
         }
 
@@ -402,46 +351,12 @@ class ApiService {
         foodData['scanned_at'] = DateTime.now().toIso8601String();
 
         return foodData;
-      } else if (response.statusCode == 401) {
-        final newToken = await refreshToken();
-        return analyzeFoodImage(imagePath, newToken);
       } else {
         final message = responseData['message'] ?? 'Failed to analyze image.';
-        if (response.statusCode == 400) {
-          throw ValidationException(message);
-        } else {
-          throw ApiException(message, response.statusCode);
-        }
+        throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.statusCode == 401) {
-        try {
-          final newToken = await refreshToken();
-          return analyzeFoodImage(imagePath, newToken);
-        } catch (_) {}
-      }
-      if (e.type == DioExceptionType.connectionTimeout ||
-          e.type == DioExceptionType.sendTimeout ||
-          e.type == DioExceptionType.receiveTimeout ||
-          e.type == DioExceptionType.connectionError) {
-        throw NetworkException(
-            'Unable to connect to backend server. Please check your network connection.');
-      } else if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ??
-            'Server error occurred during food analysis.';
-        if (e.response?.statusCode == 400) {
-          throw ValidationException(msg);
-        } else {
-          throw ApiException(msg, e.response?.statusCode);
-        }
-      } else {
-        throw ApiException(
-            e.message ?? 'Network error occurred during food analysis.');
-      }
-    } catch (e) {
-      if (e is ApiException) rethrow;
-      throw ApiException(
-          'An unexpected error occurred during food analysis: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
@@ -452,31 +367,19 @@ class ApiService {
     String? token,
   }) async {
     try {
-      String? authToken = token;
-      if (authToken == null || authToken.isEmpty) {
-        final prefs = await SharedPreferences.getInstance();
-        authToken = prefs.getString(accessTokenKey);
-      }
-
       final response = await _dio.get(
         'food/history',
         queryParameters: {
           if (isEat != null) 'isEat': isEat,
           if (date != null) 'date': date,
         },
-        options: Options(
-          headers: {
-            if (authToken != null && authToken.isNotEmpty)
-              'Authorization': 'Bearer $authToken',
-          },
-        ),
       );
 
       final responseData = response.data is Map<String, dynamic>
           ? response.data as Map<String, dynamic>
           : {};
 
-      if (response.statusCode == 200 && responseData['success'] == true) {
+      if (responseData['success'] == true) {
         final rawData = responseData['data'];
         final List<dynamic> list;
         if (rawData is List) {
@@ -499,101 +402,39 @@ class ApiService {
         }
 
         return history;
-      } else if (response.statusCode == 401) {
-        final newToken = await refreshToken();
-        return getFoodAnalysisHistory(
-            isEat: isEat, date: date, token: newToken);
       } else {
-        final message = responseData['message'] ??
-            'Failed to retrieve food analysis history.';
+        final message = responseData['message'] ?? 'Failed to retrieve food analysis history.';
         throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.statusCode == 401) {
-        try {
-          final newToken = await refreshToken();
-          return getFoodAnalysisHistory(
-              isEat: isEat, date: date, token: newToken);
-        } catch (_) {}
-      }
-      if (e.type == DioExceptionType.connectionTimeout ||
-          e.type == DioExceptionType.sendTimeout ||
-          e.type == DioExceptionType.receiveTimeout ||
-          e.type == DioExceptionType.connectionError) {
-        throw NetworkException(
-            'Unable to connect to backend server. Please check your network connection.');
-      } else if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ??
-            'Server error occurred during fetching history.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(
-            e.message ?? 'Network error occurred during fetching history.');
-      }
-    } catch (e) {
-      if (e is ApiException) rethrow;
-      throw ApiException(
-          'An unexpected error occurred during fetching history: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
   // Update is_eat status of a food analysis record using PATCH /food/history/{id}
-  static Future<Map<String, dynamic>> updateFoodIsEatStatus(
-      dynamic id, bool isEat,
-      [String? token]) async {
+  static Future<Map<String, dynamic>> updateFoodIsEatStatus(dynamic id, bool isEat, [String? token]) async {
     try {
-      String? authToken = token;
-      if (authToken == null || authToken.isEmpty) {
-        final prefs = await SharedPreferences.getInstance();
-        authToken = prefs.getString(accessTokenKey);
-      }
-
       final response = await _dio.patch(
         'food/history/$id',
         data: {
           'is_eat': isEat,
           'isEat': isEat,
         },
-        options: Options(
-          headers: {
-            if (authToken != null && authToken.isNotEmpty)
-              'Authorization': 'Bearer $authToken',
-          },
-        ),
       );
 
       final responseData = response.data is Map<String, dynamic>
           ? response.data as Map<String, dynamic>
           : {};
 
-      if (response.statusCode == 200 && responseData['success'] == true) {
+      if (responseData['success'] == true) {
         final data = responseData['data'] ?? {};
         return data is Map<String, dynamic> ? data : {};
-      } else if (response.statusCode == 401) {
-        final newToken = await refreshToken();
-        return updateFoodIsEatStatus(id, isEat, newToken);
       } else {
-        final message =
-            responseData['message'] ?? 'Failed to update track status.';
+        final message = responseData['message'] ?? 'Failed to update track status.';
         throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.statusCode == 401) {
-        try {
-          final newToken = await refreshToken();
-          return updateFoodIsEatStatus(id, isEat, newToken);
-        } catch (_) {}
-      }
-      if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ?? 'Server error occurred.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(e.message ?? 'Network error occurred');
-      }
-    } catch (e) {
-      if (e is AuthException) rethrow;
-      throw ApiException(
-          'An unexpected error occurred while updating status: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
@@ -611,12 +452,6 @@ class ApiService {
     String? token,
   }) async {
     try {
-      String? authToken = token;
-      if (authToken == null || authToken.isEmpty) {
-        final prefs = await SharedPreferences.getInstance();
-        authToken = prefs.getString(accessTokenKey);
-      }
-
       final response = await _dio.put(
         'user',
         data: {
@@ -634,19 +469,13 @@ class ApiService {
           'health_problem': healthConditions,
           'healthProblem': healthConditions,
         },
-        options: Options(
-          headers: {
-            if (authToken != null && authToken.isNotEmpty)
-              'Authorization': 'Bearer $authToken',
-          },
-        ),
       );
 
       final responseData = response.data is Map<String, dynamic>
           ? response.data as Map<String, dynamic>
           : {};
 
-      if (response.statusCode == 200 && responseData['success'] == true) {
+      if (responseData['success'] == true) {
         final rawUser = responseData['data'] ?? {};
         final user = UserModel.fromJson(rawUser).toJson();
 
@@ -655,53 +484,12 @@ class ApiService {
         await prefs.setString(userDataKey, jsonEncode(user));
 
         return user;
-      } else if (response.statusCode == 401) {
-        final newToken = await refreshToken();
-        return editUserProfile(
-          firstName: firstName,
-          lastName: lastName,
-          username: username,
-          email: email,
-          age: age,
-          weight: weight,
-          height: height,
-          bloodGroup: bloodGroup,
-          healthConditions: healthConditions,
-          token: newToken,
-        );
       } else {
-        final message =
-            responseData['message'] ?? 'Failed to update user profile.';
+        final message = responseData['message'] ?? 'Failed to update user profile.';
         throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.statusCode == 401) {
-        try {
-          final newToken = await refreshToken();
-          return editUserProfile(
-            firstName: firstName,
-            lastName: lastName,
-            username: username,
-            email: email,
-            age: age,
-            weight: weight,
-            height: height,
-            bloodGroup: bloodGroup,
-            healthConditions: healthConditions,
-            token: newToken,
-          );
-        } catch (_) {}
-      }
-      if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ?? 'Server error occurred.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(e.message ?? 'Network error occurred');
-      }
-    } catch (e) {
-      if (e is AuthException) rethrow;
-      throw ApiException(
-          'An unexpected error occurred while updating profile: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
@@ -715,30 +503,20 @@ class ApiService {
         },
       );
 
-      final Map<String, dynamic> responseData =
-          response.data is Map<String, dynamic>
-              ? response.data as Map<String, dynamic>
-              : <String, dynamic>{};
+      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
+          ? response.data as Map<String, dynamic>
+          : <String, dynamic>{};
 
-      if (response.statusCode == 200 && responseData['success'] == true) {
+      if (responseData['success'] == true) {
         return responseData['data'] is Map<String, dynamic>
             ? responseData['data'] as Map<String, dynamic>
             : <String, dynamic>{};
       } else {
-        final message =
-            responseData['message'] ?? 'Failed to send password reset token.';
+        final message = responseData['message'] ?? 'Failed to send password reset token.';
         throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ?? 'Server error occurred.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(e.message ?? 'Network error occurred');
-      }
-    } catch (e) {
-      throw ApiException(
-          'An unexpected error occurred during forgot password: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
@@ -756,60 +534,37 @@ class ApiService {
         },
       );
 
-      final Map<String, dynamic> responseData =
-          response.data is Map<String, dynamic>
-              ? response.data as Map<String, dynamic>
-              : <String, dynamic>{};
+      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
+          ? response.data as Map<String, dynamic>
+          : <String, dynamic>{};
 
-      if (response.statusCode == 200 && responseData['success'] == true) {
+      if (responseData['success'] == true) {
         return responseData;
       } else {
         final message = responseData['message'] ?? 'Failed to reset password.';
         throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ?? 'Server error occurred.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(e.message ?? 'Network error occurred');
-      }
-    } catch (e) {
-      throw ApiException(
-          'An unexpected error occurred during reset password: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
   // Get Community Feed using GET /community API
-  static Future<List<Map<String, dynamic>>> getCommunityFeed(
-      {int page = 1, int limit = 10, String? token}) async {
+  static Future<List<Map<String, dynamic>>> getCommunityFeed({int page = 1, int limit = 10, String? token}) async {
     try {
-      String? authToken = token;
-      if (authToken == null || authToken.isEmpty) {
-        final prefs = await SharedPreferences.getInstance();
-        authToken = prefs.getString(accessTokenKey);
-      }
-
       final response = await _dio.get(
         'community',
         queryParameters: {
           'page': page,
           'limit': limit,
         },
-        options: Options(
-          headers: {
-            if (authToken != null && authToken.isNotEmpty)
-              'Authorization': 'Bearer $authToken',
-          },
-        ),
       );
 
-      final Map<String, dynamic> responseData =
-          response.data is Map<String, dynamic>
-              ? response.data as Map<String, dynamic>
-              : <String, dynamic>{};
+      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
+          ? response.data as Map<String, dynamic>
+          : <String, dynamic>{};
 
-      if (response.statusCode == 200 && responseData['success'] == true) {
+      if (responseData['success'] == true) {
         final List<dynamic> list = responseData['data'] ?? [];
         final String originUrl = _dio.options.baseUrl.replaceAll('/api/', '');
 
@@ -850,59 +605,25 @@ class ApiService {
             }).toList(),
           };
         }).toList();
-      } else if (response.statusCode == 401) {
-        final newToken = await refreshToken();
-        return getCommunityFeed(page: page, limit: limit, token: newToken);
       } else {
-        final message =
-            responseData['message'] ?? 'Failed to retrieve community feed.';
+        final message = responseData['message'] ?? 'Failed to retrieve community feed.';
         throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.statusCode == 401) {
-        try {
-          final newToken = await refreshToken();
-          return getCommunityFeed(page: page, limit: limit, token: newToken);
-        } catch (_) {}
-      }
-      if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ?? 'Server error occurred.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(e.message ?? 'Network error occurred');
-      }
-    } catch (e) {
-      if (e is AuthException) rethrow;
-      throw ApiException(
-          'An unexpected error occurred while fetching community feed: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
   // Get User's Own Posts using GET /community/my-posts API
   static Future<List<Map<String, dynamic>>> getMyPosts([String? token]) async {
     try {
-      String? authToken = token;
-      if (authToken == null || authToken.isEmpty) {
-        final prefs = await SharedPreferences.getInstance();
-        authToken = prefs.getString(accessTokenKey);
-      }
+      final response = await _dio.get('community/my-posts');
 
-      final response = await _dio.get(
-        'community/my-posts',
-        options: Options(
-          headers: {
-            if (authToken != null && authToken.isNotEmpty)
-              'Authorization': 'Bearer $authToken',
-          },
-        ),
-      );
+      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
+          ? response.data as Map<String, dynamic>
+          : <String, dynamic>{};
 
-      final Map<String, dynamic> responseData =
-          response.data is Map<String, dynamic>
-              ? response.data as Map<String, dynamic>
-              : <String, dynamic>{};
-
-      if (response.statusCode == 200 && responseData['success'] == true) {
+      if (responseData['success'] == true) {
         final List<dynamic> list = responseData['data'] ?? [];
         final String originUrl = _dio.options.baseUrl.replaceAll('/api/', '');
 
@@ -943,31 +664,12 @@ class ApiService {
             }).toList(),
           };
         }).toList();
-      } else if (response.statusCode == 401) {
-        final newToken = await refreshToken();
-        return getMyPosts(newToken);
       } else {
-        final message =
-            responseData['message'] ?? 'Failed to retrieve your posts.';
+        final message = responseData['message'] ?? 'Failed to retrieve your posts.';
         throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.statusCode == 401) {
-        try {
-          final newToken = await refreshToken();
-          return getMyPosts(newToken);
-        } catch (_) {}
-      }
-      if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ?? 'Server error occurred.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(e.message ?? 'Network error occurred');
-      }
-    } catch (e) {
-      if (e is AuthException) rethrow;
-      throw ApiException(
-          'An unexpected error occurred while fetching your posts: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
@@ -981,12 +683,6 @@ class ApiService {
     String? token,
   }) async {
     try {
-      String? authToken = token;
-      if (authToken == null || authToken.isEmpty) {
-        final prefs = await SharedPreferences.getInstance();
-        authToken = prefs.getString(accessTokenKey);
-      }
-
       final beforeFileName = beforeImagePath.split(RegExp(r'[/\\]')).last;
       final afterFileName = afterImagePath.split(RegExp(r'[/\\]')).last;
 
@@ -1007,21 +703,13 @@ class ApiService {
       final response = await _dio.post(
         'community',
         data: formData,
-        options: Options(
-          headers: {
-            if (authToken != null && authToken.isNotEmpty)
-              'Authorization': 'Bearer $authToken',
-          },
-        ),
       );
 
-      final Map<String, dynamic> responseData =
-          response.data is Map<String, dynamic>
-              ? response.data as Map<String, dynamic>
-              : <String, dynamic>{};
+      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
+          ? response.data as Map<String, dynamic>
+          : <String, dynamic>{};
 
-      if ((response.statusCode == 200 || response.statusCode == 201) &&
-          responseData['success'] == true) {
+      if (responseData['success'] == true) {
         final map = responseData['data'] ?? {};
         final String originUrl = _dio.options.baseUrl.replaceAll('/api/', '');
 
@@ -1043,8 +731,7 @@ class ApiService {
         if (userStr != null && userStr.isNotEmpty) {
           try {
             final user = jsonDecode(userStr);
-            name = '${user['first_name'] ?? 'You'} ${user['last_name'] ?? ''}'
-                .trim();
+            name = '${user['first_name'] ?? 'You'} ${user['last_name'] ?? ''}'.trim();
             username = user['username'] ?? 'you';
           } catch (_) {}
         }
@@ -1063,267 +750,94 @@ class ApiService {
           'author_avatar_color': 0xFF2ECC71,
           'comments': [],
         };
-      } else if (response.statusCode == 401) {
-        final newToken = await refreshToken();
-        return publishCommunityPost(
-          caption: caption,
-          beforeMetric: beforeMetric,
-          afterMetric: afterMetric,
-          beforeImagePath: beforeImagePath,
-          afterImagePath: afterImagePath,
-          token: newToken,
-        );
       } else {
         final message = responseData['message'] ?? 'Failed to publish post.';
         throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.statusCode == 401) {
-        try {
-          final newToken = await refreshToken();
-          return publishCommunityPost(
-            caption: caption,
-            beforeMetric: beforeMetric,
-            afterMetric: afterMetric,
-            beforeImagePath: beforeImagePath,
-            afterImagePath: afterImagePath,
-            token: newToken,
-          );
-        } catch (_) {}
-      }
-      if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ?? 'Server error occurred.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(e.message ?? 'Network error occurred');
-      }
-    } catch (e) {
-      if (e is AuthException) rethrow;
-      throw ApiException(
-          'An unexpected error occurred while publishing post: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
   // Toggle Like Status of a Community Post using POST /community/:id/like API
-  static Future<Map<String, dynamic>> toggleLikePost(dynamic postId,
-      [String? token]) async {
+  static Future<Map<String, dynamic>> toggleLikePost(dynamic postId, [String? token]) async {
     try {
-      String? authToken = token;
-      if (authToken == null || authToken.isEmpty) {
-        final prefs = await SharedPreferences.getInstance();
-        authToken = prefs.getString(accessTokenKey);
-      }
+      final response = await _dio.post('community/$postId/like');
 
-      final response = await _dio.post(
-        'community/$postId/like',
-        options: Options(
-          headers: {
-            if (authToken != null && authToken.isNotEmpty)
-              'Authorization': 'Bearer $authToken',
-          },
-        ),
-      );
+      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
+          ? response.data as Map<String, dynamic>
+          : <String, dynamic>{};
 
-      final Map<String, dynamic> responseData =
-          response.data is Map<String, dynamic>
-              ? response.data as Map<String, dynamic>
-              : <String, dynamic>{};
-
-      if (response.statusCode == 200 && responseData['success'] == true) {
+      if (responseData['success'] == true) {
         return responseData['data'] ?? {};
-      } else if (response.statusCode == 401) {
-        final newToken = await refreshToken();
-        return toggleLikePost(postId, newToken);
       } else {
         final message = responseData['message'] ?? 'Failed to update like.';
         throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.statusCode == 401) {
-        try {
-          final newToken = await refreshToken();
-          return toggleLikePost(postId, newToken);
-        } catch (_) {}
-      }
-      if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ?? 'Server error occurred.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(e.message ?? 'Network error occurred');
-      }
-    } catch (e) {
-      if (e is AuthException) rethrow;
-      throw ApiException('An unexpected error occurred while liking post: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
   // Add Comment to a Community Post using POST /community/:id/comment API
-  static Future<Map<String, dynamic>> addCommentToPost(
-      dynamic postId, String content,
-      [String? token]) async {
+  static Future<Map<String, dynamic>> addCommentToPost(dynamic postId, String content, [String? token]) async {
     try {
-      String? authToken = token;
-      if (authToken == null || authToken.isEmpty) {
-        final prefs = await SharedPreferences.getInstance();
-        authToken = prefs.getString(accessTokenKey);
-      }
-
       final response = await _dio.post(
         'community/$postId/comment',
         data: {
           'content': content,
         },
-        options: Options(
-          headers: {
-            if (authToken != null && authToken.isNotEmpty)
-              'Authorization': 'Bearer $authToken',
-          },
-        ),
       );
 
-      final Map<String, dynamic> responseData =
-          response.data is Map<String, dynamic>
-              ? response.data as Map<String, dynamic>
-              : <String, dynamic>{};
+      final Map<String, dynamic> responseData = response.data is Map<String, dynamic>
+          ? response.data as Map<String, dynamic>
+          : <String, dynamic>{};
 
-      if ((response.statusCode == 200 || response.statusCode == 201) &&
-          responseData['success'] == true) {
+      if (responseData['success'] == true) {
         return responseData['data'] ?? {};
-      } else if (response.statusCode == 401) {
-        final newToken = await refreshToken();
-        return addCommentToPost(postId, content, newToken);
       } else {
         final message = responseData['message'] ?? 'Failed to post comment.';
         throw ApiException(message, response.statusCode);
       }
-    } on DioException catch (e) {
-      if (e.response != null && e.response?.statusCode == 401) {
-        try {
-          final newToken = await refreshToken();
-          return addCommentToPost(postId, content, newToken);
-        } catch (_) {}
-      }
-      if (e.response != null && e.response?.data is Map) {
-        final msg = e.response?.data['message'] ?? 'Server error occurred.';
-        throw ApiException(msg, e.response?.statusCode);
-      } else {
-        throw ApiException(e.message ?? 'Network error occurred');
-      }
-    } catch (e) {
-      if (e is AuthException) rethrow;
-      throw ApiException(
-          'An unexpected error occurred while posting comment: $e');
+    } catch (e, stack) {
+      _handleError(e, stack);
     }
   }
 
-  // Mock Community Feed database
-  static final List<Map<String, dynamic>> mockCommunityPosts = [
-    {
-      'id': 'post-1',
-      'author_name': 'Sophia Miller',
-      'author_username': 'sophiam',
-      'author_avatar_color': 0xFF9B59B6, // Amethyst purple
-      'caption':
-          'Consistency is key! Swapped high carb processed meals for green organic salads and protein salmon bowls. Down 12kg in 2 months. Feeling so much lighter!',
-      'before_metric': '84 kg (April)',
-      'after_metric': '72 kg (June)',
-      'likes': 142,
-      'is_liked': false,
-      'comments': [
-        {
-          'author': 'Liam Green',
-          'text': 'This is absolutely inspiring, Sophia! Keep it up.',
-          'time': '2h ago',
-        },
-        {
-          'author': 'Olivia Smith',
-          'text': 'What was your daily average calorie target?',
-          'time': '1h ago',
-        }
-      ]
-    },
-    {
-      'id': 'post-2',
-      'author_name': 'Marcus Carter',
-      'author_username': 'marcus_fit',
-      'author_avatar_color': 0xFF3498DB, // Blue
-      'caption':
-          'Sticking to whole foods, portion control, and oatmeal breakfasts. Kept my daily calorie target at 1800 kcal consistently. Visual proof of clean eating results!',
-      'before_metric': 'Daily Pizza & Soda',
-      'after_metric': 'Oats & Salmon Bowls',
-      'likes': 87,
-      'is_liked': true,
-      'comments': [
-        {
-          'author': 'Emma Watson',
-          'text': 'Meal prep Sunday pays off! Incredible determination.',
-          'time': '3h ago',
-        }
-      ]
-    },
-    {
-      'id': 'post-3',
-      'author_name': 'Elena Rostova',
-      'author_username': 'elena_runs',
-      'author_avatar_color': 0xFFE74C3C, // Coral red
-      'caption':
-          'Hit my target weight! 🏃‍♀️ Focused on daily step goals (10k+) and high-fiber/low-GI snacks. Swapped milk chocolate for raw almonds and blueberries. The energy boost is unreal!',
-      'before_metric': '76 kg (Jan)',
-      'after_metric': '65 kg (May)',
-      'likes': 215,
-      'is_liked': false,
-      'comments': [
-        {
-          'author': 'Marcus Carter',
-          'text':
-              'The step count really is a game-changer. Awesome work, Elena!',
-          'time': '4h ago',
-        }
-      ]
-    },
-    {
-      'id': 'post-4',
-      'author_name': 'David Vance',
-      'author_username': 'davidv_keto',
-      'author_avatar_color': 0xFFF39C12, // Orange
-      'caption':
-          'Keto journey update! 🥑 Cut down carbs drastically, added healthy fats. My body fat percentage dropped from 26% to 18%. Avocados, eggs, and leafy greens are my absolute staples now.',
-      'before_metric': '26% Body Fat',
-      'after_metric': '18% Body Fat',
-      'likes': 94,
-      'is_liked': false,
-      'comments': [
-        {
-          'author': 'Sophia Miller',
-          'text': '26% to 18% is huge! Did you experience keto flu at first?',
-          'time': '5h ago',
-        },
-        {
-          'author': 'David Vance',
-          'text':
-              'Yes, the first 4 days were rough! Salt water and extra avocados helped.',
-          'time': '3h ago',
-        }
-      ]
-    },
-    {
-      'id': 'post-5',
-      'author_name': 'Sarah Jenkins',
-      'author_username': 'sarah_j_health',
-      'author_avatar_color': 0xFF1ABC9C, // Turquoise
-      'caption':
-          'Meal prep is the secret weapon. Spent 2 hours on Sunday prepping grilled chicken, roasted sweet potatoes, and steamed broccoli for the week. Saved money and stayed on track!',
-      'before_metric': 'Takeout 5x/wk',
-      'after_metric': 'Homecooked 100%',
-      'likes': 312,
-      'is_liked': false,
-      'comments': [
-        {
-          'author': 'Emma Watson',
-          'text': 'What containers do you use? Do they freeze well?',
-          'time': '1d ago',
-        }
-      ]
+  // Unified Error Handler Helper
+  static Never _handleError(Object error, StackTrace stackTrace) {
+    if (error is ApiException) {
+      throw error;
     }
-  ];
+    if (error is DioException) {
+      if (error.type == DioExceptionType.connectionTimeout ||
+          error.type == DioExceptionType.sendTimeout ||
+          error.type == DioExceptionType.receiveTimeout ||
+          error.type == DioExceptionType.connectionError) {
+        throw NetworkException(
+            'Unable to connect to backend server. Please check your network connection.');
+      }
+
+      // If the error object contains a nested ApiException (e.g. from token refresh failure)
+      if (error.error is ApiException) {
+        throw error.error as ApiException;
+      }
+
+      final response = error.response;
+      if (response != null) {
+        final responseData = response.data;
+        final message = responseData is Map ? responseData['message'] : null;
+        final status = response.statusCode;
+        if (status == 400) {
+          throw ValidationException(message ?? 'Invalid input data.');
+        } else if (status == 401 || status == 403) {
+          throw AuthException(message ?? 'Unauthorized access.');
+        } else {
+          throw ApiException(message ?? 'Server error occurred.', status);
+        }
+      }
+      throw ApiException(error.message ?? 'Network error occurred');
+    }
+    throw ApiException('An unexpected error occurred: $error');
+  }
 }

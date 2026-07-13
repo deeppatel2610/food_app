@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/env_variables.dart';
@@ -8,6 +9,7 @@ import 'api_exceptions.dart';
 import '../models/user_model.dart';
 import '../models/food_analysis_model.dart';
 
+
 export 'api_exceptions.dart';
 
 class ApiService {
@@ -15,8 +17,15 @@ class ApiService {
 
   static Dio get _dio {
     if (_dioInstance == null) {
-      String baseUrl =
-          devApiUrl.isNotEmpty ? devApiUrl : 'http://127.0.0.1:3000/api/';
+      String baseUrl = '';
+      if (kReleaseMode) {
+        baseUrl = prodApiUrl.isNotEmpty ? prodApiUrl : devApiUrl;
+      } else {
+        baseUrl = devApiUrl.isNotEmpty ? devApiUrl : prodApiUrl;
+      }
+      if (baseUrl.isEmpty) {
+        baseUrl = 'http://127.0.0.1:3000/api/';
+      }
       if (!baseUrl.endsWith('/')) {
         baseUrl = '$baseUrl/';
       }

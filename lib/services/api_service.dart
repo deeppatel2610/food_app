@@ -253,6 +253,66 @@ class ApiService {
     }
   }
 
+  // 1.5. Google Login Method using Dio connecting to Backend API
+  static Future<Map<String, dynamic>> loginWithGoogle({
+    String? idToken,
+    String? googleId,
+    String? email,
+    String? firstName,
+    String? lastName,
+    bool bypassVerification = false,
+  }) async {
+    try {
+      final response = await _dio.post(
+        ApiEndpoints.googleAuth,
+        data: {
+          if (idToken != null) 'idToken': idToken,
+          if (googleId != null) 'googleId': googleId,
+          if (email != null) 'email': email,
+          if (firstName != null) 'firstName': firstName,
+          if (lastName != null) 'lastName': lastName,
+          'bypassVerification': bypassVerification,
+        },
+      );
+
+      final responseData = response.data is Map<String, dynamic>
+          ? response.data as Map<String, dynamic>
+          : {};
+
+      if (responseData['success'] == true) {
+        final data = responseData['data'] ?? {};
+        final accessToken = data['accessToken'] ?? '';
+        final refreshToken = data['refreshToken'] ?? '';
+        final userId = data['userId'];
+
+        // Save tokens to SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(accessTokenKey, accessToken);
+        await prefs.setString(refreshTokenKey, refreshToken);
+
+        Map<String, dynamic> user = {};
+        if (data['user'] != null && data['user'] is Map) {
+          user = UserModel.fromJson(data['user']).toJson();
+          await prefs.setString(userDataKey, jsonEncode(user));
+        } else if (userId != null) {
+          user = await getUserDetails(userId);
+        }
+
+        return {
+          'status': 'success',
+          'token': accessToken,
+          'user': user,
+          'isNewUser': data['isNewUser'] ?? false,
+        };
+      } else {
+        final message = responseData['message'] ?? 'Google authentication failed.';
+        throw ApiException(message, response.statusCode);
+      }
+    } catch (e, stack) {
+      _handleError(e, stack);
+    }
+  }
+
   // 2. Real Registration Method using Dio connecting to Backend API
   static Future<Map<String, dynamic>> register({
     required String firstName,

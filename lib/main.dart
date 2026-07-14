@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:ui';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:food_app/firebase_options.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'services/api_service.dart';
@@ -18,12 +20,17 @@ import 'screens/all_scans_screen.dart';
 import 'screens/forgot_password_screen.dart';
 import 'screens/reset_password_screen.dart';
 import 'screens/edit_profile_screen.dart';
+import 'screens/complete_profile_screen.dart';
 import 'package:provider/provider.dart';
 import 'providers/user_provider.dart';
 import 'models/user_model.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
   // Suppress unhandled Google Fonts network fetching exceptions when offline
   PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
@@ -146,6 +153,9 @@ class MyApp extends StatelessWidget {
             break;
           case '/edit_profile':
             builder = const EditProfileScreen();
+            break;
+          case '/complete_profile':
+            builder = const CompleteProfileScreen();
             break;
           default:
             builder = isLoggedIn ? const HomeScreen() : const WelcomeScreen();

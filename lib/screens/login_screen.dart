@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:flutter/foundation.dart';
 import '../widgets/custom_text_field.dart';
 import '../widgets/social_login_button.dart';
 import '../services/api_service.dart';
@@ -103,6 +105,253 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       }
     }
+  }
+
+  void _handleGoogleLogin() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final GoogleSignIn googleSignIn = GoogleSignIn(
+        scopes: ['email', 'profile'],
+      );
+
+      final GoogleSignInAccount? googleAccount = await googleSignIn.signIn();
+      
+      if (googleAccount != null) {
+        final GoogleSignInAuthentication googleAuth = await googleAccount.authentication;
+        final String? idToken = googleAuth.idToken;
+
+        if (idToken == null || idToken.isEmpty) {
+          throw ApiException('Failed to retrieve Google ID token.');
+        }
+
+        final response = await ApiService.loginWithGoogle(
+          idToken: idToken,
+        );
+
+        _processGoogleAuthResponse(response);
+      } else {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        _showDeveloperBypassDialog(e.toString());
+      } else {
+        setState(() {
+          _isLoading = false;
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Google Sign-In failed: $e', style: GoogleFonts.poppins()),
+              backgroundColor: Colors.red[800],
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  void _processGoogleAuthResponse(Map<String, dynamic> response) {
+    if (mounted) {
+      Provider.of<UserProvider>(context, listen: false)
+          .setUser(UserModel.fromJson(response['user']));
+
+      final isNewUser = response['isNewUser'] == true;
+      final greeting = isNewUser
+          ? 'Welcome to Food App, ${response['user']['first_name']}!'
+          : 'Welcome back, ${response['user']['first_name']}!';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            greeting,
+            style: GoogleFonts.poppins(),
+          ),
+          backgroundColor: const Color(0xFF27AE60),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10)),
+        ),
+      );
+
+      if (isNewUser) {
+        Navigator.pushNamedAndRemoveUntil(
+          context,
+          '/complete_profile',
+          (route) => false,
+        );
+      } else {
+        Navigator.pushNamedAndRemoveUntil(
+          context,
+          '/home',
+          (route) => false,
+        );
+      }
+    }
+  }
+
+  void _showDeveloperBypassDialog(String originalError) {
+    setState(() {
+      _isLoading = false;
+    });
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        final emailController = TextEditingController(text: 'john.doe@gmail.com');
+        final firstNameController = TextEditingController(text: 'John');
+        final lastNameController = TextEditingController(text: 'Doe');
+        final googleIdController = TextEditingController(text: '110169484474386276334');
+        bool dialogLoading = false;
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Row(
+                children: [
+                  const Icon(Icons.developer_mode_rounded, color: Color(0xFF27AE60)),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Developer Bypass',
+                    style: GoogleFonts.outfit(fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Google Sign-In failed natively. Would you like to use Google Developer Bypass for testing?',
+                      style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey[600]),
+                    ),
+                    const SizedBox(height: 15),
+                    Text(
+                      'Original Error: $originalError',
+                      style: GoogleFonts.poppins(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.red[800]),
+                    ),
+                    const SizedBox(height: 15),
+                    TextField(
+                      controller: emailController,
+                      decoration: InputDecoration(
+                        labelText: 'Mock Email',
+                        labelStyle: GoogleFonts.poppins(fontSize: 12),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: firstNameController,
+                            decoration: InputDecoration(
+                              labelText: 'First Name',
+                              labelStyle: GoogleFonts.poppins(fontSize: 12),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: lastNameController,
+                            decoration: InputDecoration(
+                              labelText: 'Last Name',
+                              labelStyle: GoogleFonts.poppins(fontSize: 12),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: googleIdController,
+                      decoration: InputDecoration(
+                        labelText: 'Mock Google ID (Sub)',
+                        labelStyle: GoogleFonts.poppins(fontSize: 12),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: dialogLoading ? null : () => Navigator.pop(context),
+                  child: Text(
+                    'Cancel',
+                    style: GoogleFonts.poppins(color: Colors.grey[600], fontWeight: FontWeight.w600),
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: dialogLoading
+                      ? null
+                      : () async {
+                          setDialogState(() {
+                            dialogLoading = true;
+                          });
+                          try {
+                            final response = await ApiService.loginWithGoogle(
+                              googleId: googleIdController.text.trim(),
+                              email: emailController.text.trim(),
+                              firstName: firstNameController.text.trim(),
+                              lastName: lastNameController.text.trim(),
+                              bypassVerification: true,
+                            );
+
+                            if (context.mounted) {
+                              Navigator.pop(context); // Close dialog
+                              _processGoogleAuthResponse(response);
+                            }
+                          } catch (err) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Bypass failed: $err', style: GoogleFonts.poppins()),
+                                  backgroundColor: Colors.red[800],
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            }
+                          } finally {
+                            setDialogState(() {
+                              dialogLoading = false;
+                            });
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF2ECC71),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: dialogLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(Colors.white)),
+                        )
+                      : Text(
+                          'Bypass & Login',
+                          style: GoogleFonts.poppins(color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -317,13 +566,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           color: Color(0xFFDB4437), // Google Red
                           size: 24,
                         ),
-                        onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                                content: Text('Logging in with Google...',
-                                    style: GoogleFonts.poppins())),
-                          );
-                        },
+                        onPressed: _isLoading ? null : _handleGoogleLogin,
                       ),
                       // Facebook
                       SocialIconButton(

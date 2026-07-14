@@ -3,7 +3,6 @@
 *.log
 *.pyc
 *.swp
-*.env
 .DS_Store
 .atom/
 .buildlog/
@@ -17,10 +16,8 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# Visual Studio Code related
+.vscode/
 
 # Flutter/Dart/Pub related
 **/doc/api/
@@ -42,3 +39,31 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android signing keys & local settings
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.gpg
+key.properties
+/android/local.properties
+
+# iOS local settings & build outputs
+/ios/Flutter/Generated.xcconfig
+/ios/Flutter/flutter_export_environment.sh
+/ios/Flutter/ephemeral/
+/ios/Pods/
+/ios/.symlinks/
+Pods/
+Podfile.lock
+
+# macOS local settings & build outputs
+/macos/Flutter/Generated.xcconfig
+/macos/Flutter/flutter_export_environment.sh
+/macos/Flutter/ephemeral/
+
+# Local Environment Variables
+.env
+.env.*
+!.env.example

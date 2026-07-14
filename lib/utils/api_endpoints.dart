@@ -5,6 +5,7 @@ class ApiEndpoints {
   static const String refresh = 'auth/refresh';
   static const String forgotPassword = 'auth/forgot-password';
   static const String resetPassword = 'auth/reset-password';
+  static const String googleAuth = 'auth/google';
   static const String user = 'user';
   static const String foodAnalyze = 'food/analyze';
   static const String foodHistory = 'food/history';
